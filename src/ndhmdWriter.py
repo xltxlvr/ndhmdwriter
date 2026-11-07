@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.5.1"
+__version__ = "0.5.3"
 
 from contextlib import contextmanager
 
@@ -21990,6 +21990,30 @@ def ndhmdsync_config_path() -> Path | None:
     return home / ".config" / "ndhmd4tex" / "config" / "ndhmdsync.ini"
 
 
+def macos_app_bundle():
+    """macOS 에서 .app 번들 안에서 돌고 있으면 그 번들 경로, 아니면 None.
+    py2app(별칭 모드 포함)은 실행기가 EXECUTABLEPATH·RESOURCEPATH 환경변수를
+    정해 준다. 둘 다 없고 얼린 실행 파일이면 sys.executable 의 상위 .app."""
+    if sys.platform != "darwin":
+        return None
+    for var, ups in (("EXECUTABLEPATH", 3), ("RESOURCEPATH", 2)):
+        v = os.environ.get(var)
+        if v:
+            p = Path(v)
+            for _ in range(ups):
+                p = p.parent
+            if p.suffix == ".app":
+                return p
+    # 얼린 실행 파일(PyInstaller 등)일 때만 실행 파일의 상위 .app 을 인정한다.
+    # 얼리지 않은 파이썬은 python.org 판처럼 sys.executable 이 Python.app
+    # 안을 가리킬 수 있는데, 그걸 번들로 오인하면 안 된다.
+    if getattr(sys, "frozen", False):
+        for par in Path(sys.executable).parents:
+            if par.suffix == ".app":
+                return par
+    return None
+
+
 def self_invoke_template() -> str:
     """지금 실행 중인 나 자신을 --goto %l %f 로 다시 부르는 명령줄.
 
@@ -21999,6 +22023,14 @@ def self_invoke_template() -> str:
     나중에 채운다 — 경로에 공백이 있어도 안전하다), 경로마다 큰따옴표로
     감싸 둔다.
     """
+    bundle = macos_app_bundle()
+    if bundle is not None:
+        # .app 으로 돌 때 sys.executable 은 번들의 실행기가 아니라 파이썬
+        # 해석기다(py2app -A 별칭 모드는 홈브루 파이썬 그 자체). 그것에
+        # --goto 를 주면 앱이 아니라 빈 파이썬이 뜬다. `open -n -a` 로
+        # 번들을 새 프로세스로 띄우면, 이미 실행 중인 창에는 단일 인스턴스
+        # 전달(IPC)로 --goto 가 건네지고 새 프로세스는 곧 끝난다.
+        return f'/usr/bin/open -n -a "{bundle}" --args --goto %l %f'
     if getattr(sys, "frozen", False):
         return f'"{sys.executable}" --goto %l %f'
     script = str(Path(__file__).resolve())
