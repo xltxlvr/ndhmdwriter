@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 from contextlib import contextmanager
 
@@ -19258,6 +19258,9 @@ class MainWindow(QMainWindow):
         
         # 프로세스 출력을 가져와 디코딩합니다.
         raw = decode_subprocess_output(bytes(proc.readAllStandardOutput()))
+        # 줄마다 붙은 `[ndhmd] ` 는 가리고 보여 준다. 뒤의 공백은 한 칸만
+        # 떼어, 들여쓴 YAML 줄의 들여쓰기가 살아 있게 한다.
+        raw = re.sub(r"^\[ndhmd\] ?", "", raw, flags=re.M)
         self.statusBar().showMessage("프론트매터 덤프 완료", 4000)
         
         # 기존에 정의된 ConsoleOutputDialog를 재사용하여 텍스트 위젯으로 표시합니다.
