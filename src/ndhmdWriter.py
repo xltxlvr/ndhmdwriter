@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.5.3"
+__version__ = "0.5.5"
 
 from contextlib import contextmanager
 
@@ -3631,7 +3631,7 @@ class BookIndex:
     def read_includes(path: Path) -> list:
         """파일에 줄 단위로 적힌 {{이름}} 들을 순서대로 돌려준다."""
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = read_manuscript(path).splitlines()
         except (OSError, UnicodeDecodeError):
             return []
         out = []
@@ -3719,7 +3719,7 @@ class BookIndex:
         하나도 없었으면 파일 끝에 붙인다.
         """
         try:
-            text = path.read_text(encoding="utf-8")
+            text = read_manuscript(path)
         except (OSError, UnicodeDecodeError):
             return False
         lines = text.splitlines()
@@ -3982,7 +3982,7 @@ class TagStore:
         text = live(path) if live else None
         if text is None:
             try:
-                text = path.read_text(encoding="utf-8")
+                text = read_manuscript(path)
             except (OSError, UnicodeDecodeError):
                 text = ""
         return tags + extract_inline_tags(text)
@@ -4007,7 +4007,7 @@ class TagStore:
         if self.ws:
             for path in list(self.ws.source_files()) + list(self.ws.aux_files()):
                 try:
-                    text = path.read_text(encoding="utf-8")
+                    text = read_manuscript(path)
                 except (OSError, UnicodeDecodeError):
                     continue
                 tags.update(extract_inline_tags(text))
@@ -4728,7 +4728,7 @@ class LabelIndex:
     @classmethod
     def scan_file(cls, path: Path) -> list:
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = read_manuscript(path).splitlines()
         except (OSError, UnicodeDecodeError):
             return []
         return cls.scan_lines(lines, path)
@@ -5106,7 +5106,7 @@ class TocPanel(QWidget):
                 lines = win.editor.toPlainText().splitlines()
             else:
                 try:
-                    lines = path.read_text(encoding="utf-8").splitlines()
+                    lines = read_manuscript(path).splitlines()
                 except (OSError, UnicodeDecodeError):
                     continue
             fence = 0
@@ -5607,7 +5607,7 @@ class Preamble:
             if text is not None:
                 return text
         try:
-            return path.read_text(encoding="utf-8")
+            return read_manuscript(path)
         except (OSError, UnicodeDecodeError):
             return ""
 
@@ -8236,7 +8236,7 @@ class FilePeekDialog(QDialog):
 
     def _show_text(self, box):
         try:
-            text = self.path.read_text(encoding="utf-8")
+            text = read_manuscript(self.path)
         except (OSError, UnicodeDecodeError) as e:
             self._show_unsupported(box, f"읽지 못했습니다: {e}")
             return
@@ -8325,7 +8325,7 @@ def scan_image_sources(win: "MainWindow"):
             text = win.editor.toPlainText()
         else:
             try:
-                text = path.read_text(encoding="utf-8")
+                text = read_manuscript(path)
             except (OSError, UnicodeDecodeError):
                 continue
         lines = text.splitlines()
@@ -8377,7 +8377,7 @@ def flatten_all_includes(text: str, base_dir: Path, _depth: int = 0, _seen=None)
             missing.append(name)
             return m.group(0)
         try:
-            sub_text = target.read_text(encoding="utf-8")
+            sub_text = read_manuscript(target)
         except (OSError, UnicodeDecodeError):
             missing.append(name)
             return m.group(0)
@@ -8419,7 +8419,7 @@ def find_all_references(win: "MainWindow"):
             lines = win.editor.toPlainText().splitlines()
         else:
             try:
-                lines = path.read_text(encoding="utf-8").splitlines()
+                lines = read_manuscript(path).splitlines()
             except (OSError, UnicodeDecodeError):
                 continue
         fence = 0
@@ -8464,7 +8464,7 @@ def _book_text_lines(win: "MainWindow"):
             lines = win.editor.toPlainText().splitlines()
         else:
             try:
-                lines = path.read_text(encoding="utf-8").splitlines()
+                lines = read_manuscript(path).splitlines()
             except (OSError, UnicodeDecodeError):
                 continue
         out.append((path, lines))
@@ -8541,7 +8541,7 @@ def collect_citation_keys(win: "MainWindow", book_lines=None):
             continue
         seen.add(rp)
         try:
-            text = bp.read_text(encoding="utf-8")
+            text = read_manuscript(bp)
         except (OSError, UnicodeDecodeError):
             continue
         n_bib += 1
@@ -12775,7 +12775,7 @@ class CitationPanel(QDialog):
         self._all_entries = []
         for p in files:
             try:
-                text = p.read_text(encoding="utf-8")
+                text = read_manuscript(p)
             except (OSError, UnicodeDecodeError):
                 continue
             self._all_entries.extend(extract_bib_entries(text))
@@ -12923,7 +12923,7 @@ class BibliographyGridDialog(QDialog):
             lines = self._win.editor.toPlainText().splitlines()
         else:
             try:
-                lines = self.target_path.read_text(encoding="utf-8").splitlines()
+                lines = read_manuscript(self.target_path).splitlines()
             except (OSError, UnicodeDecodeError):
                 lines = []
         rng = find_bibliography_range_in_lines(lines)
@@ -14246,7 +14246,7 @@ class NmdSync:
     def load(cls, path: Path) -> "NmdSync":
         entries = []
         try:
-            text = path.read_text(encoding="utf-8")
+            text = read_manuscript(path)
         except (OSError, UnicodeDecodeError):
             return cls(entries)
         for line in text.splitlines():
@@ -14311,7 +14311,7 @@ def set_frontmatter_key(path: Path, key: str, value: str | None):
     나머지는 그대로 둔다.
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        text = read_manuscript(path)
     except (OSError, UnicodeDecodeError):
         return
     lines = text.split("\n")
@@ -14987,7 +14987,7 @@ class SynopsisCardsDialog(QDialog):
         if path == w._path:
             return w.editor.toPlainText()
         try:
-            return path.read_text(encoding="utf-8")
+            return read_manuscript(path)
         except (OSError, UnicodeDecodeError):
             return ""
 
@@ -16091,6 +16091,7 @@ class MainWindow(QMainWindow):
         #: 기억해 둔다(_cursor_memory) — 다음에 열 때는 디스크를 다시
         #: 읽는다, 그 사이 바깥에서 바뀌었을 수도 있고 잃을 편집도 없다.
         self._dirty_docs = {}       # Path -> QTextDocument
+        self._src_enc = {}          # Path -> 읽을 때의 인코딩(utf-8·utf-8-sig·utf-16·cp949)
         self._cursor_memory = {}    # Path -> 블록 번호
         #: setDocument() 로 문서를 갈아 끼우는 동안은 True. Qt 가 그때
         #: textChanged 를 한 번 쏘는데, _mark_dirty() 가 그걸 사용자
@@ -16651,7 +16652,7 @@ class MainWindow(QMainWindow):
             return
         root_file = LabelIndex.book_files(self.index, self._path)[0]
         try:
-            text = root_file.read_text(encoding="utf-8")
+            text = read_manuscript(root_file)
         except (OSError, UnicodeDecodeError) as e:
             QMessageBox.warning(self, "내보내기", f"{root_file.name} 을(를) 읽지 못했습니다: {e}")
             return
@@ -16710,7 +16711,7 @@ class MainWindow(QMainWindow):
                 if path == root_path:
                     # 책 루트 -- 그대로(장을 가리키는 {{}} 구조를 유지).
                     try:
-                        text = path.read_text(encoding="utf-8")
+                        text = read_manuscript(path)
                     except (OSError, UnicodeDecodeError):
                         continue
                     (dest_dir / path.name).write_text(text, encoding="utf-8")
@@ -16739,7 +16740,7 @@ class MainWindow(QMainWindow):
         둔다.
         """
         try:
-            text = node.path.read_text(encoding="utf-8")
+            text = read_manuscript(node.path)
         except (OSError, UnicodeDecodeError):
             return "", []
         missing = []
@@ -16751,7 +16752,7 @@ class MainWindow(QMainWindow):
                 return m.group(0)   # node 의 자식이 아니면 그대로 둔다
             target = (node.path.parent / name).resolve()
             try:
-                sub_text = target.read_text(encoding="utf-8")
+                sub_text = read_manuscript(target)
             except (OSError, UnicodeDecodeError):
                 missing.append(name)
                 return m.group(0)
@@ -16960,10 +16961,11 @@ class MainWindow(QMainWindow):
         본다"이므로 open_path() 의 캐시·커서기억 로직을 타지 않는다.
         """
         try:
-            text = path.read_text(encoding="utf-8")
+            text, enc = read_manuscript_ex(path)
         except (OSError, UnicodeDecodeError) as e:
             QMessageBox.warning(self, "열기 실패", str(e))
             return
+        self._src_enc[path.resolve()] = enc
         self._attach_document(path.resolve(), self._new_document(text), dirty=False)
 
     def _attach_document(self, path: Path, doc: QTextDocument, dirty: bool):
@@ -17076,11 +17078,13 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"파일을 찾지 못했습니다: {path}", 6000)
                 return
             try:
-                text = path.read_text(encoding="utf-8")
+                text, enc = read_manuscript_ex(path)
             except (OSError, UnicodeDecodeError) as e:
                 QMessageBox.warning(self, "열기 실패", str(e))
                 return
+            self._src_enc[path] = enc
             self._attach_document(path, self._new_document(text), dirty=False)
+            self._announce_source_encoding(path, enc)
 
         target_line = line if line is not None else self._cursor_memory.get(path, 0) + 1
         self.editor.goto_file_line(target_line)
@@ -17154,8 +17158,12 @@ class MainWindow(QMainWindow):
             doc = self._dirty_docs.get(p)
             if doc is None:
                 continue
+            if not self._confirm_encoding_change(p):
+                failed.append(p.name)
+                continue
             try:
                 p.write_text(doc.toPlainText(), encoding="utf-8")
+                self._src_enc[p.resolve()] = "utf-8"
                 self._dirty_docs.pop(p, None)
             except OSError:
                 failed.append(p.name)
@@ -18438,7 +18446,7 @@ class MainWindow(QMainWindow):
                 out.append((path, self.editor.toPlainText().splitlines()))
             else:
                 try:
-                    out.append((path, path.read_text(encoding="utf-8").splitlines()))
+                    out.append((path, read_manuscript(path).splitlines()))
                 except (OSError, UnicodeDecodeError):
                     continue
         if self._path is not None and all(p != self._path for p, _ in out):
@@ -18712,7 +18720,7 @@ class MainWindow(QMainWindow):
             self.refresh_drawer()
             return
         try:
-            text = path.read_text(encoding="utf-8")
+            text = read_manuscript(path)
         except (OSError, UnicodeDecodeError) as e:
             QMessageBox.warning(self, "복제 실패", str(e))
             return
@@ -18816,7 +18824,7 @@ class MainWindow(QMainWindow):
         if self._dirty and not self.save_file():
             return
         try:
-            text = doc.read_text(encoding="utf-8")
+            text = read_manuscript(doc)
         except (OSError, UnicodeDecodeError) as e:
             QMessageBox.warning(self, "장별로 자르기", f"읽지 못했습니다: {e}")
             return
@@ -18901,7 +18909,7 @@ class MainWindow(QMainWindow):
         if not self.confirm_discard_all("하위 파일 합치기"):
             return
         try:
-            text = doc.read_text(encoding="utf-8")
+            text = read_manuscript(doc)
         except (OSError, UnicodeDecodeError) as e:
             QMessageBox.warning(self, "하위 파일 합치기", f"읽지 못했습니다: {e}")
             return
@@ -18909,7 +18917,7 @@ class MainWindow(QMainWindow):
         contents, dropped_all = {}, []
         for rp, p in kids.items():
             try:
-                body, dropped = merge_child_text(p.read_text(encoding="utf-8"))
+                body, dropped = merge_child_text(read_manuscript(p))
             except (OSError, UnicodeDecodeError) as e:
                 QMessageBox.warning(self, "하위 파일 합치기", f"{p.name} 을(를) 읽지 못했습니다: {e}")
                 return
@@ -20116,7 +20124,48 @@ class MainWindow(QMainWindow):
         self._dirty_docs.pop(path, None)   # 캐시도 버린다 — 디스크가 진실이 된다
         self.load(path)
 
+    def _announce_source_encoding(self, path: Path, enc: str):
+        """UTF-8 이 아닌 파일을 열었음을 알린다(저장하면 UTF-8 이 된다)."""
+        if enc == "utf-8-sig":
+            msg = f"{path.name}: UTF-8 BOM 을 떼고 열었습니다 — 저장하면 BOM 없이 저장됩니다"
+        elif enc in NON_UTF8_ENCODINGS:
+            msg = (f"{path.name}: {enc} 파일을 UTF-8 텍스트로 열었습니다 — "
+                   f"저장하면 UTF-8 로 바뀝니다")
+        else:
+            return
+        self.statusBar().showMessage(msg, 10000)
+
+    def _confirm_encoding_change(self, path: Path) -> bool:
+        """UTF-8 이 아니던 원고를 처음 저장할 때, 원본이 UTF-8 로 바뀐다고
+        알리고 원본을 남길지 묻는다. False 면 저장을 그만둔다."""
+        key = path.resolve()
+        enc = self._src_enc.get(key)
+        if enc not in NON_UTF8_ENCODINGS or not key.exists():
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("인코딩이 바뀝니다")
+        box.setText(f"{key.name} 은(는) {enc} 로 저장된 파일입니다.\n"
+                    f"저장하면 UTF-8 로 바뀌며, 다시 {enc} 로 내보낼 수는 없습니다.")
+        b_bak = box.addButton("원본을 남기고 저장", QMessageBox.AcceptRole)
+        b_go = box.addButton("그냥 저장", QMessageBox.DestructiveRole)
+        box.addButton("취소", QMessageBox.RejectRole)
+        box.setDefaultButton(b_bak)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is b_bak:
+            bak = key.with_name(f"{key.name}.{enc}.bak")
+            try:
+                shutil.copy2(key, bak)
+            except OSError as e:
+                QMessageBox.warning(self, "백업 실패", f"{bak.name}: {e}")
+                return False
+            return True
+        return clicked is b_go
+
     def _write(self, path: Path) -> bool:
+        if not self._confirm_encoding_change(path):
+            return False
         try:
             path.write_text(self.editor.toPlainText(), encoding="utf-8")
         except OSError as e:
@@ -20125,6 +20174,7 @@ class MainWindow(QMainWindow):
         if self._path is not None:
             self._dirty_docs.pop(self._path, None)
         self._path = path.resolve()
+        self._src_enc[self._path] = "utf-8"
         self._dirty = False
         self._baseline_text = self.editor.toPlainText()
         self._dirty_docs.pop(self._path, None)
@@ -20292,14 +20342,47 @@ class MainWindow(QMainWindow):
         if not self.find_bar.use_regex():
             return None
         rx = QRegularExpression(self.find_bar.text())
+        # ^ $ 는 (예전처럼) 줄머리·줄끝이다. `.` 은 줄바꿈에 맞지 않는다 —
+        # 줄을 넘어 찾으려면 \n 이나 (?s) 를 쓴다.
+        opts = QRegularExpression.MultilineOption
         if not self.find_bar.case_sensitive():
-            rx.setPatternOptions(QRegularExpression.CaseInsensitiveOption)
+            opts |= QRegularExpression.CaseInsensitiveOption
+        rx.setPatternOptions(opts)
         return rx if rx.isValid() else None
 
     #: 바꾸기 칸의 $1, ${1}, \1 을 캡처 그룹으로 인식한다 — 세 가지
     #: 표기 다 흔히 쓰이므로(다른 에디터·정규식 관례가 갈린다) 셋
     #: 다 받는다.
     _REPL_GROUP_RE = re.compile(r"\$\{(\d+)\}|\$(\d+)|\\(\d+)")
+
+    #: 정규식 바꾸기 칸의 한 토막: \\ \n \t, ${1} $1 \1
+    _REPL_TOKEN_RE = re.compile(
+        r"\\\\|\\n|\\t|\$\{(\d+)\}|\$(\d+)|\\(\d+)")
+
+    def _expand_at(self, rx, full: str, start: int, template: str) -> str:
+        """전체 글 `full` 의 `start` 에서 시작하는 일치에 대해 바꿀 글을 만든다.
+        일치한 글만 따로 다시 맞추지 않고 원래 자리에서(앞뒤 문맥 그대로)
+        맞추므로 lookbehind·\\b·^ 가 어긋나지 않는다. 바꾸기 칸에서
+        \\n 은 줄바꿈, \\t 는 탭, \\\\ 는 역슬래시 하나, $1 ${1} \\1 은
+        캡처 그룹이다."""
+        m = rx.match(full, start, QRegularExpression.NormalMatch,
+                     QRegularExpression.AnchoredMatchOption)
+        last = m.lastCapturedIndex() if m.hasMatch() else -1
+
+        def repl(mo):
+            t = mo.group(0)
+            if t == "\\\\":
+                return "\\"
+            if t == "\\n":
+                return "\n"
+            if t == "\\t":
+                return "\t"
+            n = int(mo.group(1) or mo.group(2) or mo.group(3))
+            if n > last:
+                return t     # 없는 그룹 참조 — 그대로 둔다(오타 방지)
+            return m.captured(n)
+
+        return self._REPL_TOKEN_RE.sub(repl, template)
 
     def _expand_replacement(self, matched_text: str, template: str) -> str:
         """정규식 바꾸기의 캡처 그룹을 치환 문자열에 채워 넣는다.
@@ -20360,6 +20443,29 @@ class MainWindow(QMainWindow):
                 return
             cursor.setPosition(bounds[0])
         count = 0
+        if rx is not None:
+            # 줄(블록) 하나 안에서만 찾는 QTextDocument.find() 로는 \n 이 든
+            # 패턴이 맞지 않는다. 전체 글에서 직접 맞추고 그 자리로 커서를
+            # 만든다 — 문서 위치와 글 속 위치는 줄바꿈 한 글자씩으로 같다.
+            full = doc.toPlainText()
+            pos = bounds[0] if bounds else 0
+            while count < self.MAX_HITS and pos <= len(full):
+                m = rx.match(full, pos)
+                if not m.hasMatch():
+                    return
+                a, b = m.capturedStart(), m.capturedEnd()
+                if b <= a:                   # 빈 일치는 건너뛴다
+                    pos = a + 1
+                    continue
+                if bounds and b > bounds[1]:
+                    return
+                c = QTextCursor(doc)
+                c.setPosition(a)
+                c.setPosition(b, QTextCursor.KeepAnchor)
+                yield c
+                count += 1
+                pos = b
+            return
         while count < self.MAX_HITS:
             cursor = doc.find(rx, cursor, flags) if rx else doc.find(needle, cursor, flags)
             if cursor.isNull():
@@ -20392,7 +20498,7 @@ class MainWindow(QMainWindow):
         rx = self._regex()
         if self.find_bar.use_regex() and rx is None:
             return
-        if self.find_bar.is_selection():
+        if self.find_bar.is_selection() or rx is not None:
             self._find_step_in_scope(backward)
             return
         flags = self._find_flags(backward)
@@ -20416,7 +20522,8 @@ class MainWindow(QMainWindow):
         """선택 범위 안에서만 다음/이전 일치로 간다. 끝에 닿으면 범위의 반대편에서 이어진다."""
         matches = list(self._iter_matches())
         if not matches:
-            self.find_bar.set_status("먼저 글을 선택하세요" if self._scope_bounds() is None else "없음")
+            scoped = self.find_bar.is_selection()
+            self.find_bar.set_status("먼저 글을 선택하세요" if scoped and self._scope_bounds() is None else "없음")
             return
         cur = self.editor.textCursor()
         if backward:
@@ -20428,8 +20535,12 @@ class MainWindow(QMainWindow):
             found = pool[0] if pool else matches[0]
             wrapped = not pool
         if wrapped:
-            self.statusBar().showMessage("범위의 처음부터 다시 찾았습니다" if not backward
-                                         else "범위의 끝부터 다시 찾았습니다", 2000)
+            if self.find_bar.is_selection():
+                msg = ("범위의 처음부터 다시 찾았습니다" if not backward
+                       else "범위의 끝부터 다시 찾았습니다")
+            else:
+                msg = "처음부터 다시 찾았습니다"
+            self.statusBar().showMessage(msg, 2000)
         self.push_location()
         self.editor.ensure_visible(found.blockNumber())
         self.editor.setTextCursor(found)
@@ -20456,8 +20567,14 @@ class MainWindow(QMainWindow):
                 cursor.clearSelection()
         if cursor.hasSelection():
             template = self.find_bar.replace_text()
-            matched = cursor.selectedText().replace("\u2029", "\n")
-            cursor.insertText(self._expand_replacement(matched, template))
+            rx = self._regex()
+            if rx is not None:
+                full = self.editor.document().toPlainText()
+                out = self._expand_at(rx, full, cursor.selectionStart(), template)
+            else:
+                matched = cursor.selectedText().replace("\u2029", "\n")
+                out = self._expand_replacement(matched, template)
+            cursor.insertText(out)
         self.find_step(False)
 
     def replace_all(self):
@@ -20473,11 +20590,20 @@ class MainWindow(QMainWindow):
             return
         template = self.find_bar.replace_text()
         cursor = self.editor.textCursor()
+        rx = self._regex()
+        full = self.editor.document().toPlainText()
+        # 바꿀 글은 고치기 전의 전체 글에서 모두 만들어 둔다.
+        outs = []
+        for c in matches:
+            if rx is not None:
+                outs.append(self._expand_at(rx, full, c.selectionStart(), template))
+            else:
+                matched = c.selectedText().replace("\u2029", "\n")
+                outs.append(self._expand_replacement(matched, template))
         cursor.beginEditBlock()
         # 뒤에서부터 바꿔야 앞쪽 위치가 밀리지 않는다.
-        for c in reversed(matches):
-            matched = c.selectedText().replace("\u2029", "\n")
-            c.insertText(self._expand_replacement(matched, template))
+        for c, out in reversed(list(zip(matches, outs))):
+            c.insertText(out)
         cursor.endEditBlock()
         self.highlight_matches_in_file()     # 먼저 다시 칠하고
         self.find_bar.set_status(f"{len(matches)}개 바꿈")   # 그 위에 결과를 쓴다
@@ -20509,7 +20635,7 @@ class MainWindow(QMainWindow):
         hits, total = [], 0
         for path in self.workspace.source_files():
             try:
-                lines = path.read_text(encoding="utf-8").splitlines()
+                lines = read_manuscript(path).splitlines()
             except (OSError, UnicodeDecodeError):
                 continue
             found = [(i + 1, line) for i, line in enumerate(lines) if rx.search(line)]
@@ -20554,7 +20680,7 @@ class MainWindow(QMainWindow):
         targets = []
         for path in self.workspace.source_files():
             try:
-                text = path.read_text(encoding="utf-8")
+                text = read_manuscript(path)
             except (OSError, UnicodeDecodeError):
                 continue
             try:
@@ -21460,7 +21586,7 @@ class MainWindow(QMainWindow):
                 lines = self.editor.toPlainText().splitlines()
             else:
                 try:
-                    lines = path.read_text(encoding="utf-8").splitlines()
+                    lines = read_manuscript(path).splitlines()
                 except (OSError, UnicodeDecodeError):
                     continue
             rng = find_bibliography_range_in_lines(lines)
@@ -21604,7 +21730,7 @@ class MainWindow(QMainWindow):
             self.editor.set_bibliography_folded(True)
         else:
             try:
-                text = target_path.read_text(encoding="utf-8")
+                text = read_manuscript(target_path)
             except (OSError, UnicodeDecodeError):
                 QMessageBox.warning(self, "참고문헌 편집", f"{target_path.name} 을(를) 읽지 못했습니다.")
                 return
@@ -21846,8 +21972,10 @@ class MainWindow(QMainWindow):
             name = self._path.name
         else:
             name = "새 원고"
+        enc = self._src_enc.get(self._path) if self._path else None
+        mark = f" [{enc}→UTF-8]" if enc in NON_UTF8_ENCODINGS else ""
         self.setWindowTitle(
-            f"{'● ' if self._title_dirty else ''}{name} — {self.workspace.name}")
+            f"{'● ' if self._title_dirty else ''}{name}{mark} — {self.workspace.name}")
 
     def _update_status(self):
         cursor = self.editor.textCursor()
@@ -21931,6 +22059,40 @@ def _suppress_console(proc: "QProcess"):
         args.flags |= 0x08000000   # CREATE_NO_WINDOW
     proc.setCreateProcessArgumentsModifier(modifier)
     proc.setStandardInputFile(QProcess.nullDevice())
+
+
+# ---------------------------------------------------------------------------
+# 원고 읽기: 인코딩 감지
+# ---------------------------------------------------------------------------
+#: UTF-8 이 아닌 채로 열린 원고. 저장하면 UTF-8 로 바뀌므로 처음 저장할 때 묻는다.
+NON_UTF8_ENCODINGS = ("cp949", "utf-16")
+
+
+def read_manuscript_ex(path) -> tuple:
+    """원고(또는 부속 파일)를 읽어 (글, 원래 인코딩)을 준다.
+
+    UTF-8 BOM 은 떼고("utf-8-sig"), UTF-16 은 BOM 으로 알아보고, 그 밖에는
+    UTF-8 을 엄격하게 시도한 뒤 안 되면 cp949 로 읽는다. 줄 끝은
+    Path.read_text 처럼 \\n 으로 통일한다. 어느 것으로도 못 읽으면
+    UnicodeDecodeError — 부르는 쪽이 이미 잡고 있는 예외다.
+    저장은 어디서나 BOM 없는 UTF-8 이다(cp949 로 내보내는 기능은 없다)."""
+    data = Path(path).read_bytes()
+    if data.startswith(b"\xef\xbb\xbf"):
+        text, enc = data[3:].decode("utf-8"), "utf-8-sig"
+    elif data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text, enc = data.decode("utf-16"), "utf-16"
+    else:
+        try:
+            text, enc = data.decode("utf-8"), "utf-8"
+        except UnicodeDecodeError:
+            text, enc = data.decode("cp949"), "cp949"
+    if "\r" in text:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text, enc
+
+
+def read_manuscript(path) -> str:
+    return read_manuscript_ex(path)[0]
 
 
 def decode_subprocess_output(data: bytes) -> str:
