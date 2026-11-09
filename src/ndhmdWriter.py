@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.5.5"
+__version__ = "0.5.7"
 
 from contextlib import contextmanager
 
@@ -37,6 +37,7 @@ import os
 import platform
 import re
 import textwrap
+import difflib
 import shlex
 import shutil
 import signal
@@ -141,6 +142,7 @@ from PySide6.QtGui import (QAction, QColor, QFont, QFontDatabase, QGuiApplicatio
                            QIcon, QKeySequence, QShortcut, QPainter, QPalette, QPixmap, QStandardItem,
                            QPen, QStandardItemModel, QSyntaxHighlighter, QTextCharFormat,
                            QTextCursor, QTextFormat)
+from PySide6.QtWidgets import QTextBrowser
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QCompleter,
                                QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
                                QHeaderView, QLabel, QMainWindow, QMenu, QMessageBox,
@@ -2966,6 +2968,7 @@ class Editor(QPlainTextEdit):
             menu.addSeparator()
 
             host.add_ai_menu(menu, cursor)
+            host.add_ext_tool_menu(menu, cursor)
             lookup_text = selected_text.replace("\u2029", " ").strip()
             lookup_menu = menu.addMenu("찾아보기…")
             google_action = lookup_menu.addAction("Google에서 찾기")
@@ -15412,6 +15415,9 @@ class AiRunner(QObject):
         # 앱이 직접 만든 빈 임시 폴더이므로 신뢰해도 안전하다. gemini 는 신뢰하지 않는 폴더에서는 실행을 거부한다.
         env.insert("GEMINI_CLI_TRUST_WORKSPACE", "true")
         env.insert("NO_COLOR", "1")
+        # 파이썬으로 만든 도구가 윈도에서 cp949 로 입출력하지 않게 한다.
+        env.insert("PYTHONUTF8", "1")
+        env.insert("PYTHONIOENCODING", "utf-8")
         env.insert("PATH", os.pathsep.join(
             [x for x in [exe_dir] + _ai_extra_dirs() + [env.value("PATH")] if x]))
         p.setProcessEnvironment(env)
@@ -15443,8 +15449,8 @@ class AiRunner(QObject):
     def _on_finished(self, code, _status):
         p = self._proc
         ansi = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-        out = ansi.sub("", bytes(p.readAllStandardOutput()).decode("utf-8", "replace"))
-        err = ansi.sub("", bytes(p.readAllStandardError()).decode("utf-8", "replace")).strip()
+        out = ansi.sub("", decode_subprocess_output(bytes(p.readAllStandardOutput())))
+        err = ansi.sub("", decode_subprocess_output(bytes(p.readAllStandardError()))).strip()
         if self._cancelled:
             self._finish(False, "", "취소했습니다.")
         elif code == 0 and out.strip():
@@ -15691,6 +15697,369 @@ def load_dictionaries(settings) -> list:
 
 def dictionary_url(template: str, text: str) -> str:
     return template.replace("{q}", urllib.parse.quote(text, safe=""))
+
+
+# ---------------------------------------------------------------------------
+# 외부 도구 — 선택한 글(없으면 현재 파일 전체)을 사용자가 등록한 명령행 프로그램에
+# 표준 입력으로 보내고, 표준 출력을 결과로 받는다. 철자 검사기·문단 이어 붙이기
+# (hgwordstitcher) 같은 것을 앱 밖에 맡기려는 것이다. AI 도우미와 같은 실행기
+# (AiRunner)·결과 창(AiResultDialog)을 쓴다. 책 전체에는 적용하지 않는다.
+# ---------------------------------------------------------------------------
+EXT_TOOLS_KEY = "exttools/items"
+EXT_PROPOSE, EXT_APPLY = "propose", "apply"
+EXT_MODE_LABELS = {EXT_PROPOSE: "교체 제안", EXT_APPLY: "바로 적용"}
+
+
+def ext_tool_search_dirs(extra: str = "") -> list:
+    """도구를 찾을 폴더: 사용자가 적은 폴더 → 흔한 설치 폴더 → PATH."""
+    dirs = [os.path.expanduser(x.strip()) for x in re.split(r"[;\n]|" + re.escape(os.pathsep), extra or "")
+            if x.strip()]
+    dirs += _ai_extra_dirs()
+    dirs += [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    return dirs
+
+
+def ext_tool_resolve(command: str, extra_dirs: str = ""):
+    """명령을 (실행 파일 전체 경로, 인자 목록)으로 푼다. 잘못이면 ValueError."""
+    command = (command or "").strip()
+    if not command:
+        raise ValueError("명령이 비어 있습니다.")
+    try:
+        parts = shlex.split(command, posix=(sys.platform != "win32"))
+    except ValueError as e:
+        raise ValueError(f"명령을 읽을 수 없습니다: {e}")
+    if sys.platform == "win32":           # 비 POSIX 분할은 따옴표를 남긴다
+        parts = [x[1:-1] if len(x) >= 2 and x[0] == x[-1] and x[0] in "\"'" else x for x in parts]
+    if not parts:
+        raise ValueError("명령이 비어 있습니다.")
+    prog = parts[0]
+    if os.sep in prog or (os.altsep and os.altsep in prog):
+        exe = os.path.expanduser(prog)
+        if not os.path.isfile(exe):
+            raise ValueError(f"실행 파일이 없습니다: {prog}")
+    else:
+        exe = shutil.which(prog, path=os.pathsep.join(ext_tool_search_dirs(extra_dirs)))
+        if not exe:
+            raise ValueError(f"{prog} 을(를) 찾지 못했습니다. PATH 나 '추가 검색 폴더'에 두세요.")
+    return exe, parts[1:]
+
+
+def ext_tool_build(command: str, text: str, extra_dirs: str = ""):
+    """(프로그램, 인자 목록, 표준 입력 글 또는 None, 임시 입력 파일 또는 None).
+
+    명령의 첫 낱말이 프로그램이다. 경로가 없으면 사용자 폴더·PATH 에서 찾는다.
+    인자에 {입력} 이 있으면 글을 임시 파일(UTF-8)에 쓰고 그 경로를 넣는다 —
+    이때는 표준 입력을 쓰지 않는다. 잘못이면 ValueError."""
+    exe, args = ext_tool_resolve(command, extra_dirs)
+    tmp = None
+    use_stdin = True
+    if any("{입력}" in a for a in args):
+        fd, tmp = tempfile.mkstemp(prefix="ndhmd_in_", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        args = [a.replace("{입력}", tmp) for a in args]
+        use_stdin = False
+    if sys.platform == "win32" and exe.lower().endswith((".cmd", ".bat")):
+        return "cmd.exe", ["/c", exe] + args, (text if use_stdin else None), tmp
+    return exe, args, (text if use_stdin else None), tmp
+
+
+def ext_tool_fit_output(orig: str, out: str) -> str:
+    """AiRunner 는 출력 끝의 줄바꿈을 떼므로, 원문 끝의 줄바꿈 수를 되돌려 준다."""
+    tail = len(orig) - len(orig.rstrip("\n"))
+    return out.rstrip("\n") + "\n" * tail
+
+
+def diff_chars_html(a: str, b: str, limit: int = 40000) -> str:
+    """원문 a 와 결과 b 의 달라진 곳을 글자 단위로 칠한 HTML.
+    먼저 줄 단위로 맞추고, 바뀐 줄 묶음 안에서만 글자 단위로 맞춘다(전체를 글자 단위로 하면 느리다)."""
+    esc = _html.escape
+    DEL = '<span style="background-color:#fdb8c0;color:#000;text-decoration:line-through">%s</span>'
+    INS = '<span style="background-color:#a6e3a1;color:#000">%s</span>'
+    la, lb = a.splitlines(keepends=True), b.splitlines(keepends=True)
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, la, lb, autojunk=False).get_opcodes():
+        A, B = "".join(la[i1:i2]), "".join(lb[j1:j2])
+        if tag == "equal":
+            out.append(esc(A))
+        elif tag == "delete":
+            out.append(DEL % esc(A))
+        elif tag == "insert":
+            out.append(INS % esc(B))
+        elif len(A) + len(B) > limit:
+            out.append(DEL % esc(A) + INS % esc(B))
+        else:
+            for t, a1, a2, b1, b2 in difflib.SequenceMatcher(None, A, B, autojunk=False).get_opcodes():
+                if t == "equal":
+                    out.append(esc(A[a1:a2]))
+                    continue
+                if a2 > a1:
+                    out.append(DEL % esc(A[a1:a2]))
+                if b2 > b1:
+                    out.append(INS % esc(B[b1:b2]))
+    return '<pre style="white-space:pre-wrap;font-family:monospace">' + "".join(out) + "</pre>"
+
+
+class ExtToolResultDialog(AiResultDialog):
+    """외부 도구 결과 창(교체 제안). AI 도우미 창과 같되 '변경점 보기'가 있다."""
+
+    def __init__(self, window: "MainWindow", item: dict, cursor: QTextCursor):
+        item = dict(item)
+        item["mode"] = AI_REPLACE
+        super().__init__(window, item, cursor)
+        self.setWindowTitle(f"외부 도구 — {item.get('name', '')}")
+        self.diff = QTextBrowser()
+        self.diff.setVisible(False)
+        self.out.parentWidget().layout().addWidget(self.diff, 1)
+        self.chk_diff = QCheckBox("변경점 보기 (글자 단위)")
+        self.chk_diff.setEnabled(False)
+        self.chk_diff.toggled.connect(self._toggle_diff)
+        self.layout().insertWidget(2, self.chk_diff)
+
+    def _toggle_diff(self, on: bool):
+        if on:
+            self.diff.setHtml(diff_chars_html(self._plain, self.out.toPlainText()))
+        self.diff.setVisible(on)
+        self.out.setVisible(not on)
+
+    def _run(self):
+        w = self._win
+        try:
+            program, args, stdin_text, tmp = ext_tool_build(
+                self._item.get("command", ""), self._plain, w.ext_tool_dirs())
+        except ValueError as e:
+            self.status.setText(str(e))
+            self._set_busy(False)
+            self.btn_retry.setEnabled(True)
+            return
+        self._tmp_in = tmp
+        self.head.setText(f"<b>{_html.escape(self._item.get('name', ''))}</b> · "
+                          f"{_html.escape(self._item.get('command', ''))} · 입력 {len(self._plain):,}자")
+        self.out.setPlainText("")
+        self.chk_diff.setChecked(False)
+        self.chk_diff.setEnabled(False)
+        self.status.setText("실행 중…")
+        self._set_busy(True)
+        self._runner = AiRunner(self)
+        self._runner.done.connect(self._on_done)
+        self._runner.start(program, args, stdin_text, os.path.dirname(program), w.ext_tool_timeout())
+
+    def _on_done(self, ok: bool, out: str, err: str):
+        tmp = getattr(self, "_tmp_in", None)
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            self._tmp_in = None
+        if ok:
+            out = ext_tool_fit_output(self._plain, out)
+        super()._on_done(ok, out, err)
+        if ok:
+            self.status.setText("완료. 변경점을 보고 반영하세요." + (f"  (도구 메시지: {err[:200]})" if err else ""))
+            self.chk_diff.setEnabled(True)
+        self.btn_insert.setEnabled(False)       # 외부 도구는 교체만 한다
+
+
+class ExtToolConfirmDialog(QDialog):
+    """실행 직전에 명령줄(옵션)을 확인·수정하는 창. 수정은 이번 한 번에만 쓰이며,
+    '도구에 저장'을 고르면 등록된 명령도 바뀐다. '옵션 도움말'은 프로그램에 --help 를 준다."""
+
+    def __init__(self, window: "MainWindow", item: dict, scope: str, nchars: int):
+        super().__init__(window)
+        self._win = window
+        self._runner = None
+        self.setWindowTitle(f"외부 도구 실행 — {item.get('name', '')}")
+        self.resize(680, 150)
+        lay = QVBoxLayout(self)
+        info = _T("대상: {}").format(_T(scope)) + f" · {nchars:,}" + _T("자")
+        lay.addWidget(QLabel(f"<b>{_html.escape(item.get('name', ''))}</b> · {_html.escape(info)}"))
+        self.edit = QLineEdit(item.get("command", ""))
+        mono = QFont("monospace")
+        mono.setStyleHint(QFont.Monospace)
+        self.edit.setFont(mono)
+        self.edit.textChanged.connect(self._check)
+        lay.addWidget(self.edit)
+        self.note = QLabel()
+        self.note.setWordWrap(True)
+        lay.addWidget(self.note)
+        self.help = QPlainTextEdit()
+        self.help.setReadOnly(True)
+        self.help.setFont(mono)
+        self.help.setVisible(False)
+        lay.addWidget(self.help, 1)
+        self.chk_save = QCheckBox("이 명령을 도구에 저장")
+        lay.addWidget(self.chk_save)
+        row = QHBoxLayout()
+        self.btn_help = QPushButton("옵션 도움말 (--help)")
+        self.btn_help.clicked.connect(self._show_help)
+        row.addWidget(self.btn_help)
+        row.addStretch(1)
+        self.box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.box.button(QDialogButtonBox.Ok).setText("실행")
+        self.box.accepted.connect(self.accept)
+        self.box.rejected.connect(self.reject)
+        row.addWidget(self.box)
+        lay.addLayout(row)
+        self._check()
+
+    def command(self) -> str:
+        return self.edit.text().strip()
+
+    def save_requested(self) -> bool:
+        return self.chk_save.isChecked()
+
+    def _check(self):
+        ok = True
+        try:
+            exe, _ = ext_tool_resolve(self.command(), self._win.ext_tool_dirs())
+            self.note.setText(f"실행 파일: {exe}")
+        except ValueError as e:
+            ok = False
+            self.note.setText(f'<span style="color:#c0392b">{_html.escape(_i18n_translate(str(e)))}</span>')
+        self.box.button(QDialogButtonBox.Ok).setEnabled(ok)
+        self.btn_help.setEnabled(ok and self._runner is None)
+
+    def _show_help(self):
+        try:
+            exe, _ = ext_tool_resolve(self.command(), self._win.ext_tool_dirs())
+        except ValueError:
+            return
+        self.help.setVisible(True)
+        self.help.setPlainText("불러오는 중…")
+        self.resize(self.width(), max(self.height(), 460))
+        self.btn_help.setEnabled(False)
+        self._runner = AiRunner(self)
+        self._runner.done.connect(self._help_done)
+        prog, args = exe, ["--help"]
+        if sys.platform == "win32" and exe.lower().endswith((".cmd", ".bat")):
+            prog, args = "cmd.exe", ["/c", exe, "--help"]
+        self._runner.start(prog, args, None, os.path.dirname(exe), 30)
+
+    def _help_done(self, ok, out, err):
+        self.help.setPlainText(out.strip() or err or "도움말을 얻지 못했습니다.")
+        if self._runner is not None:
+            self._runner.deleteLater()
+            self._runner = None
+        self._check()
+
+    def done(self, r):
+        if self._runner is not None:
+            self._runner.cancel()
+        super().done(r)
+
+
+class ExtToolSettingsDialog(QDialog):
+    """외부 도구 목록: 이름·명령·방식, 추가 검색 폴더, 제한 시간."""
+
+    def __init__(self, window: "MainWindow"):
+        super().__init__(window)
+        self._win = window
+        self.setWindowTitle("외부 도구 설정")
+        self.resize(760, 420)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel(
+            "선택한 글(없으면 현재 파일 전체)을 명령의 표준 입력으로 보내고, 표준 출력으로 글을 바꿉니다.\n"
+            "인자에 {입력} 이 있으면 글을 임시 파일(UTF-8)에 쓰고 그 경로를 넣습니다(표준 입력은 쓰지 않음).\n"
+            "예: hgwordstitcher   ·   aspell --lang=en pipe   ·   \"C:\\tools\\fix.exe\" {입력}"))
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["이름", "명령", "방식", "실행 전 확인"])
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setColumnWidth(0, 150)
+        self.table.setColumnWidth(2, 110)
+        self.table.setColumnWidth(3, 100)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        lay.addWidget(self.table, 1)
+        row = QHBoxLayout()
+        for text, fn in (("추가", self._add), ("삭제", self._delete),
+                         ("위로", lambda: self._move(-1)), ("아래로", lambda: self._move(1))):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        form = QFormLayout()
+        self.dirs = QLineEdit(window.ext_tool_dirs())
+        self.dirs.setPlaceholderText("비워 두면 PATH 와 흔한 설치 위치에서 찾습니다 (여러 폴더는 ; 로 구분)")
+        form.addRow("추가 검색 폴더", self.dirs)
+        self.timeout = QSpinBox()
+        self.timeout.setRange(10, 3600)
+        self.timeout.setSuffix(" 초")
+        self.timeout.setValue(window.ext_tool_timeout())
+        form.addRow("기다리는 한도", self.timeout)
+        lay.addLayout(form)
+        box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        box.accepted.connect(self._accept)
+        box.rejected.connect(self.reject)
+        lay.addWidget(box)
+        for it in window.ext_tools():
+            self._add_row(it["name"], it["command"], it["mode"], it["confirm"])
+
+    def _combo(self, mode):
+        c = QComboBox()
+        for k, label in EXT_MODE_LABELS.items():
+            c.addItem(label, k)
+        c.setCurrentIndex(max(0, c.findData(mode)))
+        return c
+
+    def _add_row(self, name="", command="", mode=EXT_PROPOSE, confirm=True):
+        r = self.table.insertRow(self.table.rowCount()) or self.table.rowCount() - 1
+        self.table.setItem(r, 0, QTableWidgetItem(name))
+        self.table.setItem(r, 1, QTableWidgetItem(command))
+        self.table.setCellWidget(r, 2, self._combo(mode))
+        chk = QCheckBox()
+        chk.setChecked(bool(confirm))
+        holder = QWidget()
+        hl = QHBoxLayout(holder)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setAlignment(Qt.AlignCenter)
+        hl.addWidget(chk)
+        holder._chk = chk
+        self.table.setCellWidget(r, 3, holder)
+        return r
+
+    def _add(self):
+        r = self._add_row()
+        self.table.setCurrentCell(r, 0)
+        self.table.editItem(self.table.item(r, 0))
+
+    def _delete(self):
+        r = self.table.currentRow()
+        if r >= 0:
+            self.table.removeRow(r)
+
+    def _row(self, r):
+        return (self.table.item(r, 0).text(), self.table.item(r, 1).text(),
+                self.table.cellWidget(r, 2).currentData(), self.table.cellWidget(r, 3)._chk.isChecked())
+
+    def _move(self, step):
+        r = self.table.currentRow()
+        t = r + step
+        if r < 0 or not 0 <= t < self.table.rowCount():
+            return
+        a, b = self._row(r), self._row(t)
+        for row, (n, c, m, k) in ((r, b), (t, a)):
+            self.table.item(row, 0).setText(n)
+            self.table.item(row, 1).setText(c)
+            self.table.cellWidget(row, 2).setCurrentIndex(self.table.cellWidget(row, 2).findData(m))
+            self.table.cellWidget(row, 3)._chk.setChecked(k)
+        self.table.setCurrentCell(t, 0)
+
+    def _accept(self):
+        items = []
+        for r in range(self.table.rowCount()):
+            n, c, m, k = self._row(r)
+            n, c = n.strip(), c.strip()
+            if not n or not c:
+                QMessageBox.warning(self, "외부 도구 설정", f"{r + 1}번째 줄: 이름과 명령을 모두 적어 주세요.")
+                return
+            items.append({"name": n, "command": c, "mode": m, "confirm": k})
+        st = self._win._settings
+        st.setValue(EXT_TOOLS_KEY, json.dumps(items, ensure_ascii=False))
+        st.setValue("exttools/dirs", self.dirs.text().strip())
+        st.setValue("exttools/timeout", self.timeout.value())
+        self.accept()
 
 
 class DictionarySettingsDialog(QDialog):
@@ -16314,6 +16683,9 @@ class MainWindow(QMainWindow):
         act(m, "메모(&M)…", "Ctrl+Alt+M", self.open_note_panel)
         act(m, "약어 슬롯(&Y)…", "Ctrl+Alt+Y", self.open_slot_dialog)
         act(m, "AI 도우미 설정(실험)…", None, self.open_ai_settings)
+        self._ext_menu = m.addMenu("외부 도구(&Z)")
+        self._ext_menu.aboutToShow.connect(lambda: self.fill_ext_tool_menu(self._ext_menu))
+        self.fill_ext_tool_menu(self._ext_menu)
         act(m, "카드 보기(시놉시스)(&V)…", "Ctrl+Alt+V", self.open_cards)
         act(m, "모든 카드 보기(작업공간 전체)…", "Ctrl+Alt+Shift+V", self.open_all_cards)
         # 슬롯 10개: Alt+1 … Alt+0 (맥은 물리 Control — Qt 에서는 Meta 라 부른다).
@@ -21530,6 +21902,140 @@ class MainWindow(QMainWindow):
     def open_ai_settings(self):
         AiSettingsDialog(self).exec()
 
+    # -- 외부 도구 ----------------------------------------------------------------------
+
+    def ext_tools(self) -> list:
+        raw = self._settings.value(EXT_TOOLS_KEY, "")
+        try:
+            items = json.loads(raw) if raw else []
+        except (TypeError, ValueError):
+            items = []
+        return [{"name": str(x.get("name", "")), "command": str(x.get("command", "")),
+                 "mode": x.get("mode") if x.get("mode") in EXT_MODE_LABELS else EXT_PROPOSE,
+                 "confirm": bool(x.get("confirm", True))}
+                for x in items if isinstance(x, dict) and x.get("name")]
+
+    def ext_tool_dirs(self) -> str:
+        return str(self._settings.value("exttools/dirs", "") or "")
+
+    def ext_tool_timeout(self) -> int:
+        try:
+            return int(self._settings.value("exttools/timeout", 60) or 60)
+        except (TypeError, ValueError):
+            return 60
+
+    def open_ext_tool_settings(self):
+        ExtToolSettingsDialog(self).exec()
+
+    def fill_ext_tool_menu(self, menu, cursor=None):
+        """외부 도구 목록을 메뉴에 채운다. cursor 가 없으면 편집창의 현재 커서."""
+        menu.clear()
+        c = cursor if cursor is not None else self.editor.textCursor()
+        scope = "선택 범위" if c.hasSelection() else "현재 파일 전체"
+        items = self.ext_tools()
+        for item in items:
+            tag = "  [바로 적용]" if item["mode"] == EXT_APPLY else ""
+            a = menu.addAction(item["name"].replace("&", "&&") + tag)
+            a.setToolTip(item["command"])
+            a.triggered.connect(lambda _=False, it=item, cc=QTextCursor(c): self.run_ext_tool(it, cc))
+        if items:
+            menu.addSeparator()
+            menu.addAction(f"대상: {scope}").setEnabled(False)
+        else:
+            menu.addAction("등록된 도구가 없습니다").setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("설정…", self.open_ext_tool_settings)
+
+    def add_ext_tool_menu(self, menu, cursor):
+        sub = menu.addMenu("외부 도구")
+        self.fill_ext_tool_menu(sub, cursor)
+
+    def run_ext_tool(self, item: dict, cursor: QTextCursor = None):
+        """선택 범위(없으면 현재 파일 전체)를 외부 도구에 맡긴다."""
+        if self.editor.document() is None or self._path is None and not self.editor.toPlainText():
+            return
+        c = QTextCursor(cursor) if cursor is not None else QTextCursor(self.editor.textCursor())
+        if not c.hasSelection():
+            c = QTextCursor(self.editor.document())
+            c.select(QTextCursor.Document)
+        if not c.selectedText().strip():
+            self.statusBar().showMessage("보낼 글이 없습니다", 3000)
+            return
+        if item.get("confirm", True):
+            scope = "선택 범위" if (cursor is not None and cursor.hasSelection()) or (
+                cursor is None and self.editor.textCursor().hasSelection()) else "현재 파일 전체"
+            dlg = ExtToolConfirmDialog(self, item, scope, len(c.selectedText()))
+            if dlg.exec() != QDialog.Accepted:
+                return
+            item = dict(item, command=dlg.command())
+            if dlg.save_requested():
+                self._save_ext_tool_command(item)
+        if item.get("mode") == EXT_APPLY:
+            self._run_ext_tool_apply(item, c)
+        else:
+            ExtToolResultDialog(self, item, c).show()
+
+    def _save_ext_tool_command(self, item: dict):
+        items = self.ext_tools()
+        for it in items:
+            if it["name"] == item["name"]:
+                it["command"] = item["command"]
+                break
+        self._settings.setValue(EXT_TOOLS_KEY, json.dumps(items, ensure_ascii=False))
+
+    def _run_ext_tool_apply(self, item: dict, cursor: QTextCursor):
+        orig = cursor.selectedText()
+        plain = orig.replace("\u2029", "\n")
+        whole = cursor.selectionStart() == 0 and cursor.selectionEnd() >= self.editor.document().characterCount() - 1
+        keep = self.editor.textCursor().position()
+        doc = self.editor.document()
+        try:
+            program, args, stdin_text, tmp = ext_tool_build(item["command"], plain, self.ext_tool_dirs())
+        except ValueError as e:
+            QMessageBox.warning(self, item["name"], str(e))
+            return
+        sel = QTextCursor(cursor)
+        runner = AiRunner(self)
+        self._ext_runners = getattr(self, "_ext_runners", [])
+        self._ext_runners.append(runner)
+        self.statusBar().showMessage(f"{item['name']} 실행 중…")
+
+        def done(ok, out, err):
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            if runner in self._ext_runners:
+                self._ext_runners.remove(runner)
+            runner.deleteLater()
+            if not ok:
+                self.statusBar().clearMessage()
+                QMessageBox.warning(self, item["name"], (err or "알 수 없는 오류")[:600])
+                return
+            if self.editor.document() is not doc or sel.selectedText() != orig:
+                self.statusBar().clearMessage()
+                QMessageBox.warning(self, item["name"],
+                                    "실행하는 사이 원문이 바뀌었거나 다른 파일로 옮겨 적용하지 않았습니다.")
+                return
+            new = ext_tool_fit_output(plain, out)
+            if new == plain:
+                self.statusBar().showMessage(f"{item['name']}: 바뀐 곳이 없습니다", 5000)
+                return
+            c = QTextCursor(sel)
+            c.beginEditBlock()
+            c.insertText(new)
+            c.endEditBlock()
+            if whole:
+                tc = self.editor.textCursor()
+                tc.setPosition(min(keep, max(0, doc.characterCount() - 1)))
+                self.editor.setTextCursor(tc)
+            self.statusBar().showMessage(
+                f"{item['name']}: 적용했습니다 (Ctrl+Z 로 되돌립니다)" + (f" · {err[:120]}" if err else ""), 8000)
+
+        runner.done.connect(done)
+        runner.start(program, args, stdin_text, os.path.dirname(program), self.ext_tool_timeout())
+
     def dict_lookup(self, text: str, template: str):
         """선택한 글을 사전 주소(`{q}` 자리)에 넣어 기본 브라우저로 연다."""
         QDesktopServices.openUrl(QUrl(dictionary_url(template, text)))
@@ -22363,6 +22869,42 @@ _UI_LANG = "ko"
 _HANGUL_RE = re.compile("[가-힣ㄱ-ㅎㅏ-ㅣ]")
 
 _EN = {
+    '외부 도구(&Z)': 'External tools(&Z)',
+    '외부 도구': 'External tools',
+    '등록된 도구가 없습니다': 'No tools registered',
+    '  [바로 적용]': '  [apply directly]',
+    '대상: {}': 'Target: {0}',
+    '현재 파일 전체': 'Whole current file',
+    '보낼 글이 없습니다': 'There is no text to send',
+    '{} 실행 중…': '{0} running…',
+    '실행 중…': 'Running…',
+    '{}: 바뀐 곳이 없습니다': '{0}: nothing changed',
+    '{}: 적용했습니다 (Ctrl+Z 로 되돌립니다)': '{0}: applied (undo with Ctrl+Z)',
+    '실행하는 사이 원문이 바뀌었거나 다른 파일로 옮겨 적용하지 않았습니다.': 'The original text changed while the tool ran, or you moved to another file, so nothing was applied.',
+    '외부 도구 — {}': 'External tool — {0}',
+    '변경점 보기 (글자 단위)': 'Show changes (character level)',
+    '완료. 변경점을 보고 반영하세요.': 'Done. Review the changes and apply them.',
+    '<b>{}</b> · {} · 입력 {}자': '<b>{0}</b> · {1} · input: {2} chars',
+    '외부 도구 설정': 'External tool settings',
+    '실행 전 확인': 'Confirm before run',
+    '외부 도구 실행 — {}': 'Run external tool — {0}',
+    '대상: {} · {}자': 'Target: {0} · {1} chars',
+    '이 명령을 도구에 저장': 'Save this command to the tool',
+    '옵션 도움말 (--help)': 'Option help (--help)',
+    '실행 파일: {}': 'Executable: {0}',
+    '불러오는 중…': 'Loading…',
+    '도움말을 얻지 못했습니다.': 'Could not get the help text.',
+    '명령': 'Command',
+    '교체 제안': 'Replacement proposal',
+    '바로 적용': 'Apply directly',
+    '추가 검색 폴더': 'Extra search folders',
+    '비워 두면 PATH 와 흔한 설치 위치에서 찾습니다 (여러 폴더는 ; 로 구분)': 'If empty, PATH and common install locations are searched (separate several folders with ;)',
+    '{}번째 줄: 이름과 명령을 모두 적어 주세요.': 'Row {0}: enter both a name and a command.',
+    '명령이 비어 있습니다.': 'The command is empty.',
+    '명령을 읽을 수 없습니다: {}': 'Could not parse the command: {0}',
+    '실행 파일이 없습니다: {}': 'Executable not found: {0}',
+    "{} 을(를) 찾지 못했습니다. PATH 나 '추가 검색 폴더'에 두세요.": "Could not find {0}. Put it on PATH or in 'Extra search folders'.",
+    '선택한 글(없으면 현재 파일 전체)을 명령의 표준 입력으로 보내고, 표준 출력으로 글을 바꿉니다.\n인자에 {입력} 이 있으면 글을 임시 파일(UTF-8)에 쓰고 그 경로를 넣습니다(표준 입력은 쓰지 않음).\n예: hgwordstitcher   ·   aspell --lang=en pipe   ·   "C:\\tools\\fix.exe" {입력}': 'Sends the selected text (or the whole current file if nothing is selected) to the command\'s standard input, and replaces the text with its standard output.\nIf the arguments contain {입력}, the text is written to a temporary file (UTF-8) and its path is substituted (standard input is not used).\nExamples: hgwordstitcher   ·   aspell --lang=en pipe   ·   "C:\\tools\\fix.exe" {입력}',
     '절': 'Section',
     '삽입 대상: {}': 'Insert into: {0}',
     '{} 자': '{0} chars',
