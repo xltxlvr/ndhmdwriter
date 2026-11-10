@@ -6,7 +6,7 @@ PySide6, ships as a single file, and is designed around writing long, structured
 Korean-language manuscripts: books made of chapters, with cross-references,
 bibliographies, math, figures and tables.
 
-Version **0.5.1** · Author: Nova de Hi · License: MIT
+Version **0.5.7** · Author: Nova de Hi · License: MIT
 
 The UI is available in **Korean** (default) and **English**
 (*Settings ▸ Language*, applied on restart). The user manual (`MANUAL.md`) is
@@ -66,7 +66,7 @@ currently Korean only.
 | `modulegraph` | listed in `requirements.txt` |
 | [ndhmd4tex](#related-tools) | markup check, conversion, compile |
 | ndhmdsync | forward/reverse PDF search |
-| TeX Live (xelatex), `ksruncltex` or `latexmk` | compile, math preview, snippet figures |
+| TeX Live, `ksruncltex` or `latexmk` | compile, math preview, snippet figures |
 | `dvisvgm`, `pdftocairo` or `pdftoppm` | math preview images |
 | Pillow (optional) | converting webp/tiff/gif images |
 
@@ -143,7 +143,7 @@ Please refer to the following links:
 
 
 
-## License
+# License
 
 MIT. The hanja conversion dictionary is `hanja.txt` from **libhangul**
 (Copyright © 2005, 2006 Choe Hwanjin) and the symbol dictionary `mssymbol.txt`
