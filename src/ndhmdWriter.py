@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.5.7"
+__version__ = "0.5.9"
 
 from contextlib import contextmanager
 
@@ -3604,6 +3604,49 @@ class ResultsPanel(QTreeWidget):
 
 INCLUDE_LINE_RE = re.compile(r"^\s*\{\{([^{}\n]+?)\}\}\s*$")
 
+#: ndhmd4tex 의 COMMENT_RE 와 같은 규칙: 닫힌 `<!-- … -->` 만 주석이고(여러 줄 가능),
+#: 백틱 바로 옆의 것은 제외한다. 코드 펜스 안은 주석을 찾지 않는다.
+_MD_COMMENT_RE = re.compile(r"(?<!`)<!--.*?-->(?!`)", re.DOTALL)
+_MD_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,})[ \t]*([a-zA-Z0-9_-]*)[ \t]*$")   # ndhmd4tex 와 같은 규칙
+_MD_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,})[ \t]*$")
+_LINE_BREAKS = "\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
+
+
+def md_comment_spans(text: str) -> list:
+    """`<!-- … -->` 주석이 차지하는 (시작, 끝) 구간들. 그 안의 {{…}} 는 포함이 아니다.
+    ndhmd4tex 의 `_comment_spans` 와 같게, 코드 펜스 안을 공백으로 가린 사본에서 찾는다."""
+    if "<!--" not in text:
+        return []
+    masked, in_fence, flen = [], False, 0
+    for line in text.split("\n"):
+        if in_fence:
+            m = _MD_FENCE_CLOSE_RE.match(line)
+            if m and len(m.group(1)) >= flen:
+                in_fence = False
+            masked.append(" " * len(line))
+            continue
+        m = _MD_FENCE_OPEN_RE.match(line)
+        if m:
+            in_fence, flen = True, len(m.group(1))
+            masked.append(" " * len(line))
+            continue
+        masked.append(line)
+    return [m.span() for m in _MD_COMMENT_RE.finditer("\n".join(masked))]
+
+
+def mask_md_comments(text: str) -> str:
+    """주석 안의 글자를 공백으로 바꾼다(길이·줄 구분은 그대로). 포함 줄을 찾을 때 쓴다."""
+    spans = md_comment_spans(text)
+    if not spans:
+        return text
+    out, pos = [], 0
+    for a, b in spans:
+        out.append(text[pos:a])
+        out.append("".join(c if c in _LINE_BREAKS else " " for c in text[a:b]))
+        pos = b
+    out.append(text[pos:])
+    return "".join(out)
+
 
 @dataclass
 class Node:
@@ -3634,7 +3677,7 @@ class BookIndex:
     def read_includes(path: Path) -> list:
         """파일에 줄 단위로 적힌 {{이름}} 들을 순서대로 돌려준다."""
         try:
-            lines = read_manuscript(path).splitlines()
+            lines = mask_md_comments(read_manuscript(path)).splitlines()   # 주석 안은 무시
         except (OSError, UnicodeDecodeError):
             return []
         out = []
@@ -3726,9 +3769,12 @@ class BookIndex:
         except (OSError, UnicodeDecodeError):
             return False
         lines = text.splitlines()
+        masked = mask_md_comments(text).splitlines()      # 주석 안의 {{}} 줄은 포함이 아니므로 건드리지 않는다
+        if len(masked) != len(lines):
+            masked = lines
         keep, slot = [], None
-        for line in lines:
-            if INCLUDE_LINE_RE.match(line):
+        for line, mline in zip(lines, masked):
+            if INCLUDE_LINE_RE.match(mline):
                 if slot is None:
                     slot = len(keep)
                 continue
@@ -8373,7 +8419,11 @@ def flatten_all_includes(text: str, base_dir: Path, _depth: int = 0, _seen=None)
     if _depth > 8:
         return text, missing
 
+    skip = md_comment_spans(text)           # 주석 안의 {{}} 는 펴지 않고 그대로 둔다
+
     def repl(m):
+        if any(a <= m.start() < b for a, b in skip):
+            return m.group(0)
         name = m.group(1).strip()
         target = (base_dir / name).resolve()
         if target in _seen or not target.is_file():
@@ -14438,6 +14488,9 @@ def split_chapter_sections(text: str, level: int | None = None):
     lines, heads, tail = _scan_headings(text)
     if not heads:
         return None
+    mlines = mask_md_comments(text).split("\n")      # 주석 안의 {{}} 줄은 포함으로 세지 않는다
+    if len(mlines) != len(lines):
+        mlines = lines
     top = level if level is not None else min(h[1] for h in heads)
     tops = [h for h in heads if h[1] == top]
     if len(tops) < 2:
@@ -14447,7 +14500,7 @@ def split_chapter_sections(text: str, level: int | None = None):
         nxt = next((h[0] for h in heads if h[0] > idx and h[1] <= top), None)
         end = tail if nxt is None else nxt
         end = max(end, idx + 1)
-        incs = [m.group(1).strip() for ln in lines[idx:end] if (m := INCLUDE_LINE_RE.match(ln))]
+        incs = [m.group(1).strip() for ln in mlines[idx:end] if (m := INCLUDE_LINE_RE.match(ln))]
         sections.append({"start": idx, "end": end, "title": title, "includes": incs})
     return {"lines": lines, "level": top, "tail": tail, "sections": sections}
 
@@ -17117,8 +17170,11 @@ class MainWindow(QMainWindow):
             return "", []
         missing = []
         child_names = {c.name for c in node.children}
+        skip = md_comment_spans(text)
 
         def repl(m):
+            if any(a <= m.start() < b for a, b in skip):
+                return m.group(0)       # 주석 안은 그대로
             name = m.group(1).strip()
             if name not in child_names:
                 return m.group(0)   # node 의 자식이 아니면 그대로 둔다
@@ -19297,8 +19353,8 @@ class MainWindow(QMainWindow):
             if dropped:
                 dropped_all.append(f"  · {p.name}: {', '.join(sorted(set(dropped)))}")
         out, used = [], set()
-        for line in text.split("\n"):
-            m = INCLUDE_LINE_RE.match(line)
+        for line, mline in zip(text.split("\n"), mask_md_comments(text).split("\n")):
+            m = INCLUDE_LINE_RE.match(mline)
             rp = (doc.parent / m.group(1).strip()).resolve() if m else None
             if rp in contents:
                 used.add(rp)
