@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.5.9"
+__version__ = "0.6.1"
 
 from contextlib import contextmanager
 
@@ -6218,6 +6218,63 @@ class NdhmdSyncTool:
         return [str(tool), *args]
 
 
+class Ndhmd2htmlTool:
+    """ndhmd2html 을 어디서 찾을지 아는 객체. 저장된 위치 → PATH → ndhmd4tex 와 같은 폴더 순.
+    ndhmd2html 은 ndhmd4tex 를 불러 쓰므로 둘이 한 폴더에 있는 것이 정상이다."""
+
+    SETTING = "tool/ndhmd2html"
+
+    def __init__(self, settings: QSettings, tex_tool: "Ndhmd4tex"):
+        self._settings = settings
+        self._tex = tex_tool
+
+    def path(self):
+        saved = self._settings.value(self.SETTING, "")
+        if saved and Path(saved).exists():
+            return Path(saved)
+        found = shutil.which("ndhmd2html") or shutil.which("ndhmd2html.py")
+        if found:
+            return Path(found)
+        t = self._tex.path()
+        if t is not None:
+            for name in ("ndhmd2html.py", "ndhmd2html"):
+                if (t.parent / name).is_file():
+                    return t.parent / name
+        return None
+
+    def set_path(self, path: Path):
+        self._settings.setValue(self.SETTING, str(path))
+
+    def command(self, args: list):
+        tool = self.path()
+        if tool is None:
+            return None
+        if tool.suffix.lower() == ".py":
+            return [sys.executable, str(tool), *args]
+        return [str(tool), *args]
+
+
+def split_cli_args(text: str) -> list:
+    """옵션 한 줄을 낱말로 가른다. 따옴표로 공백 든 값을 묶을 수 있다(Windows 에서도)."""
+    posix = sys.platform != "win32"
+    parts = shlex.split(text or "", posix=posix)
+    if not posix:
+        parts = [p[1:-1] if len(p) >= 2 and p[0] == p[-1] and p[0] in "\"'" else p for p in parts]
+    return parts
+
+
+def html_output_path(target: Path, args: list) -> Path:
+    """ndhmd2html 이 낼 파일. -o/--output 이 있으면 그것, 없으면 입력 이름 + .html(--xhtml 이면 .xhtml)."""
+    for k, a in enumerate(args):
+        if a in ("-o", "--output") and k + 1 < len(args):
+            o = Path(args[k + 1])
+            return o if o.is_absolute() else target.parent / o
+        if a.startswith("--output="):
+            o = Path(a.split("=", 1)[1])
+            return o if o.is_absolute() else target.parent / o
+    return target.with_suffix(".xhtml" if "--xhtml" in args else ".html")
+
+
 # ===========================================================================
 # 9-j. 설정
 # ===========================================================================
@@ -6270,6 +6327,10 @@ class Prefs:
         """조각 그림 도구에서 마지막으로 고른 엔진."""
         v = self.s.value("prefs/jigsaw_engine", "xelatex", type=str)
         return v if v in JigsawFigure.ENGINES else "xelatex"
+
+    def jigsaw_png(self) -> bool:
+        """조각 그림을 저장할 때 HTML 용 PNG 를 PDF 옆에 함께 만들지."""
+        return self.s.value("prefs/jigsaw_png", True, type=bool)
 
     def jigsaw_class(self) -> str:
         """조각 그림 도구에서 마지막으로 고른 문서 클래스."""
@@ -9136,6 +9197,51 @@ class JigsawFigure:
         out += [p for _, p in sorted(found)]
         return out
 
+    # -- HTML 용 PNG ----------------------------------------------------------
+
+    #: HTML/EPUB 은 PDF 를 못 보인다. ndhmd2html 은 PDF 그림 옆에 같은 이름의 PNG·SVG 가
+    #: 있으면 그것을 쓰므로, 저장할 때 PNG 를 한 장씩 옆에 둔다(QtPdf 로 그리며 외부 도구가
+    #: 필요 없다). 96dpi 는 브라우저가 PNG 를 제 픽셀 크기로 보이는 것에 맞춰, PDF 의 1pt 가
+    #: 화면에서 4/3px 이 되는 "실제 크기"다. 더 높이면 선명하지만 HTML 에서 그만큼 커 보인다.
+    PNG_DPI = 96
+    PNG_MARK = "ndhmdWriter jigsaw"
+
+    @classmethod
+    def is_ours_png(cls, png: Path) -> bool:
+        """이 도구가 만든 PNG 인가(Software 문구로 안다). 남의 PNG 는 지우지 않으려는 것."""
+        try:
+            return QImage(str(png)).text("Software") == cls.PNG_MARK
+        except Exception:
+            return False
+
+    @classmethod
+    def render_png(cls, pdf: Path, png: Path, dpi: int = None):
+        """PDF 첫 쪽을 흰 바탕 PNG 로 그린다. (성공?, 오류 요약)."""
+        if not have_qtpdf():
+            return False, "QtPdf 가 없습니다."
+        from PySide6.QtPdf import QPdfDocument
+        dpi = dpi or cls.PNG_DPI
+        doc = QPdfDocument()
+        if doc.load(str(pdf)) != QPdfDocument.Error.None_ or doc.pageCount() < 1:
+            return False, f"{pdf.name} 을(를) 읽지 못했습니다."
+        pt = doc.pagePointSize(0)
+        size = QSize(max(1, round(pt.width() * dpi / 72)), max(1, round(pt.height() * dpi / 72)))
+        img = doc.render(0, size)
+        if img.isNull():
+            return False, f"{pdf.name} 을(를) 그리지 못했습니다."
+        out = QImage(size, QImage.Format_RGB32)
+        out.fill(Qt.white)
+        painter = QPainter(out)
+        painter.drawImage(0, 0, img)
+        painter.end()
+        dpm = round(dpi / 0.0254)
+        out.setDotsPerMeterX(dpm)
+        out.setDotsPerMeterY(dpm)
+        out.setText("Software", cls.PNG_MARK)
+        if not out.save(str(png), "PNG"):
+            return False, f"{png.name} 을(를) 쓰지 못했습니다."
+        return True, ""
+
     # -- 컴파일 ---------------------------------------------------------------
 
     @classmethod
@@ -9427,6 +9533,14 @@ class JigsawDialog(QDialog):
         opt_row.addSpacing(12)
         opt_row.addWidget(QLabel("엔진:"))
         opt_row.addWidget(self.engine_combo)
+        opt_row.addSpacing(12)
+        self.png_chk = QCheckBox("HTML용 PNG도 만들기")
+        self.png_chk.setToolTip(
+            "PDF 옆에 같은 이름의 PNG 를 둔다. ndhmd2html(HTML 변환)은 PDF 를 못 보이므로 "
+            "그 자리에 이 PNG 를 쓴다. 원고의 ![](이름.pdf) 줄은 그대로다.")
+        self.png_chk.setChecked(window.prefs.jigsaw_png() and have_qtpdf())
+        self.png_chk.setEnabled(have_qtpdf())
+        opt_row.addWidget(self.png_chk)
         opt_row.addStretch(1)
         lay.addLayout(opt_row)
         lay.addWidget(self.dest_label)
@@ -9634,11 +9748,31 @@ class JigsawDialog(QDialog):
             stale = [n for n in before if n not in names] if ours else []
             for n in stale:
                 (self._dest_dir / n).unlink(missing_ok=True)
+            # HTML 용 PNG. 꺼 두거나 쪽이 줄면, 이 도구가 전에 만든 PNG 만 지워 낡은 그림이 남지 않게 한다.
+            want_png = self.png_chk.isChecked()
+            png_fail = ""
+            keep_png = set()
+            if want_png:
+                for dst in names:
+                    png = self._dest_dir / (Path(dst).stem + ".png")
+                    ok_png, why = JigsawFigure.render_png(self._dest_dir / dst, png)
+                    if ok_png:
+                        keep_png.add(png.name)
+                    else:
+                        png_fail = why
+            for n in [*(Path(x).stem + ".png" for x in before), *(Path(x).stem + ".png" for x in names)]:
+                if n not in keep_png:
+                    old = self._dest_dir / n
+                    if old.is_file() and JigsawFigure.is_ours_png(old):
+                        old.unlink(missing_ok=True)
         except OSError as e:
             QMessageBox.warning(self, "조각 그림", f"저장하지 못했습니다: {e}")
             return
         win = self._win
-        win.prefs.write(jigsaw_preamble=pre, jigsaw_engine=engine, jigsaw_class=klass)
+        win.prefs.write(jigsaw_preamble=pre, jigsaw_engine=engine, jigsaw_class=klass,
+                        jigsaw_png=self.png_chk.isChecked())
+        if png_fail:
+            QMessageBox.warning(self, "조각 그림", f"HTML용 PNG 를 만들지 못했습니다: {png_fail}")
         panel = getattr(win, "_image_import_panel", None)
         if panel is not None:
             panel.refresh()
@@ -16002,6 +16136,82 @@ class ExtToolConfirmDialog(QDialog):
         super().done(r)
 
 
+class HtmlConvertDialog(QDialog):
+    """HTML 로 변환하기 전에 ndhmd2html 옵션을 확인·수정하는 창."""
+
+    def __init__(self, window: "MainWindow", target_name: str, scope: str, options: str,
+                 open_after: bool, ask: bool):
+        super().__init__(window)
+        self._win = window
+        self._runner = None
+        self.setWindowTitle("HTML 로 변환")
+        self.resize(680, 190)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel(f"<b>{_html.escape(target_name)}</b> · {_html.escape(_T(scope))}"))
+        lay.addWidget(QLabel("ndhmd2html 옵션"))
+        self.edit = QLineEdit(options)
+        mono = QFont("monospace")
+        mono.setStyleHint(QFont.Monospace)
+        self.edit.setFont(mono)
+        lay.addWidget(self.edit)
+        tool = window.html_tool.path()
+        self.note = QLabel(f"ndhmd2html: {tool}" if tool else "ndhmd2html 를 찾지 못했습니다.")
+        self.note.setWordWrap(True)
+        lay.addWidget(self.note)
+        self.help = QPlainTextEdit()
+        self.help.setReadOnly(True)
+        self.help.setFont(mono)
+        self.help.setVisible(False)
+        lay.addWidget(self.help, 1)
+        self.chk_open = QCheckBox("변환 뒤 브라우저로 열기")
+        self.chk_open.setChecked(open_after)
+        lay.addWidget(self.chk_open)
+        self.chk_save = QCheckBox("이 옵션을 기본값으로 저장")
+        self.chk_save.setChecked(True)
+        lay.addWidget(self.chk_save)
+        self.chk_ask = QCheckBox("다음부터 이 창을 띄우지 않기 (컴파일 ▸ HTML 변환 옵션…에서 다시 볼 수 있음)")
+        self.chk_ask.setChecked(not ask)
+        lay.addWidget(self.chk_ask)
+        row = QHBoxLayout()
+        self.btn_help = QPushButton("옵션 도움말 (--help)")
+        self.btn_help.clicked.connect(self._show_help)
+        row.addWidget(self.btn_help)
+        row.addStretch(1)
+        box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        box.button(QDialogButtonBox.Ok).setText("변환")
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        row.addWidget(box)
+        lay.addLayout(row)
+
+    def options(self) -> str:
+        return self.edit.text().strip()
+
+    def _show_help(self):
+        cmd = self._win.html_tool.command(["--help"])
+        if cmd is None:
+            return
+        self.help.setVisible(True)
+        self.help.setPlainText("불러오는 중…")
+        self.resize(self.width(), max(self.height(), 520))
+        self.btn_help.setEnabled(False)
+        self._runner = AiRunner(self)
+        self._runner.done.connect(self._help_done)
+        self._runner.start(cmd[0], cmd[1:], None, os.path.dirname(cmd[-2] if len(cmd) > 2 else cmd[0]), 30)
+
+    def _help_done(self, ok, out, err):
+        self.help.setPlainText(out.strip() or err or "도움말을 얻지 못했습니다.")
+        if self._runner is not None:
+            self._runner.deleteLater()
+            self._runner = None
+        self.btn_help.setEnabled(True)
+
+    def done(self, r):
+        if self._runner is not None:
+            self._runner.cancel()
+        super().done(r)
+
+
 class ExtToolSettingsDialog(QDialog):
     """외부 도구 목록: 이름·명령·방식, 추가 검색 폴더, 제한 시간."""
 
@@ -16465,6 +16675,9 @@ class MainWindow(QMainWindow):
         self.issues.hide()
         self.tool = Ndhmd4tex(self._settings)
         self.sync_tool = NdhmdSyncTool(self._settings)
+        self.html_tool = Ndhmd2htmlTool(self._settings, self.tool)
+        self._html_proc = None
+        self._last_html = None
         self._lint_proc = None
         self._compile_proc = None
         self._compile_target = None
@@ -16831,6 +17044,11 @@ class MainWindow(QMainWindow):
         act(m, "변환후 tex 열기(&V)", "Ctrl+Alt+T", self.convert_and_open_tex)
         self._act_open_tex = act(m, "결과 tex 열기(&X)", "Ctrl+Shift+T",
                                  self.open_result_tex)
+        m.addSeparator()
+        act(m, "책을 HTML로 변환(&H)", None, lambda: self.run_html("book"))
+        act(m, "이 파일만 HTML로 변환", None, lambda: self.run_html("file"))
+        act(m, "HTML 변환 옵션…", None, lambda: self.run_html("book", force_dialog=True))
+        act(m, "변환한 HTML 열기", None, self.open_html_result)
         m.addSeparator()
         act(m, "PDF에서 이 위치 보기(&V)", "Ctrl+Alt+F", self.forward_search)
         m.addSeparator()
@@ -19712,6 +19930,102 @@ class MainWindow(QMainWindow):
             return []
         n = self.prefs.animation_frames()
         return ["--animation=all" if n <= 0 else f"--animation={n}"]
+
+    # -- HTML 변환 (ndhmd2html) ----------------------------------------------------
+
+    def _ensure_html_tool(self) -> bool:
+        if self.html_tool.path() is not None:
+            return True
+        QMessageBox.information(
+            self, "ndhmd2html 를 찾지 못했습니다",
+            "PATH 와 ndhmd4tex 가 있는 폴더에 ndhmd2html 이 없습니다. 위치를 지정해 주세요.")
+        name, _ = QFileDialog.getOpenFileName(
+            self, "ndhmd2html 위치", str(Path.home()),
+            "ndhmd2html (ndhmd2html ndhmd2html.py);;모든 파일 (*)")
+        if not name:
+            return False
+        self.html_tool.set_path(Path(name))
+        return True
+
+    def run_html(self, scope: str = "book", force_dialog: bool = False):
+        """scope: 'book' — 책 최상위(포함을 펼친 전체), 'file' — 지금 연 파일만."""
+        if self._path is None:
+            QMessageBox.information(self, "HTML 변환", "먼저 원고를 열어 주세요.")
+            return
+        if self._html_proc is not None:
+            return
+        if not self.confirm_discard_all("HTML 변환"):
+            return
+        if not self._ensure_html_tool():
+            return
+        target = (self._path if scope == "file"
+                  else LabelIndex.book_files(self.index, self._path)[0])
+        st = self._settings
+        options = st.value("html/options", "--toc --title-block", type=str)
+        open_after = st.value("html/open", True, type=bool)
+        ask = st.value("html/ask", True, type=bool)
+        if ask or force_dialog:
+            dlg = HtmlConvertDialog(self, target.name,
+                                    "책 전체" if scope == "book" else "이 파일만",
+                                    options, open_after, ask)
+            if dlg.exec() != QDialog.Accepted:
+                return
+            options, open_after = dlg.options(), dlg.chk_open.isChecked()
+            if dlg.chk_save.isChecked():
+                st.setValue("html/options", options)
+            st.setValue("html/open", open_after)
+            st.setValue("html/ask", not dlg.chk_ask.isChecked())
+        try:
+            args = split_cli_args(options)
+        except ValueError as e:
+            QMessageBox.warning(self, "HTML 변환", f"옵션을 읽지 못했습니다: {e}")
+            return
+        cmd = self.html_tool.command([*args, str(target)])
+        if cmd is None:
+            return
+        out = html_output_path(target, args)
+        self.statusBar().showMessage(f"{target.name} → HTML 변환 중…")
+        proc = QProcess(self)
+        proc.setWorkingDirectory(str(target.parent))
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+        proc.finished.connect(
+            lambda code, stt, p=proc, o=out, oa=open_after: self._html_finished(p, o, oa))
+        proc.errorOccurred.connect(lambda e, p=proc: self._html_failed(p))
+        self._html_proc = proc
+        proc.start(cmd[0], cmd[1:])
+
+    def _html_failed(self, proc):
+        if proc is not self._html_proc:
+            return
+        self._html_proc = None
+        QMessageBox.warning(self, "실행 실패", "ndhmd2html 를 실행하지 못했습니다.")
+
+    def _html_finished(self, proc, out: Path, open_after: bool):
+        if proc is not self._html_proc:
+            return
+        self._html_proc = None
+        raw = decode_subprocess_output(bytes(proc.readAllStandardOutput())).strip()
+        if proc.exitCode() != 0 or not out.exists():
+            ConsoleOutputDialog(self, "HTML 변환 실패", raw or "출력이 없습니다.").show()
+            self.statusBar().showMessage("HTML 변환 실패", 5000)
+            return
+        self._last_html = out
+        self.statusBar().showMessage(f"HTML 변환 완료 — {out.name}", 8000)
+        if any(l.startswith(("경고", "알림")) for l in raw.splitlines()):
+            ConsoleOutputDialog(self, "HTML 변환 — 알림", raw).show()
+        if open_after:
+            self.open_html_result()
+
+    def open_html_result(self):
+        """마지막으로 변환한 HTML(없으면 지금 문서 옆의 .html)을 브라우저로 연다."""
+        out = self._last_html
+        if (out is None or not out.exists()) and self._path is not None:
+            out = self._path.with_suffix(".html")
+        if out is None or not out.exists():
+            QMessageBox.information(self, "HTML 열기", "변환한 HTML 이 아직 없습니다.")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(out))):
+            QMessageBox.warning(self, "HTML 열기", f"{out.name} 을(를) 열지 못했습니다.")
 
     def run_compile(self, scope: str = "book"):
         """scope: 'book' — 책 최상위(포함을 다 펼친 전체),
@@ -22942,6 +23256,30 @@ _EN = {
     '완료. 변경점을 보고 반영하세요.': 'Done. Review the changes and apply them.',
     '<b>{}</b> · {} · 입력 {}자': '<b>{0}</b> · {1} · input: {2} chars',
     '외부 도구 설정': 'External tool settings',
+    '책을 HTML로 변환(&H)': 'Convert book to &HTML',
+    '이 파일만 HTML로 변환': 'Convert this file only to HTML',
+    'HTML 변환 옵션…': 'HTML conversion options…',
+    '변환한 HTML 열기': 'Open converted HTML',
+    'HTML 로 변환': 'Convert to HTML',
+    'ndhmd2html 옵션': 'ndhmd2html options',
+    'ndhmd2html 를 찾지 못했습니다.': 'ndhmd2html was not found.',
+    '변환 뒤 브라우저로 열기': 'Open in browser after converting',
+    '이 옵션을 기본값으로 저장': 'Save these options as the default',
+    '다음부터 이 창을 띄우지 않기 (컴파일 ▸ HTML 변환 옵션…에서 다시 볼 수 있음)': 'Do not show this window next time (reopen via Compile ▸ HTML conversion options…)',
+    '변환': 'Convert',
+    '이 파일만': 'This file only',
+    'HTML 변환': 'HTML conversion',
+    'HTML용 PNG도 만들기': 'Also make PNG for HTML',
+    'PDF 옆에 같은 이름의 PNG 를 둔다. ndhmd2html(HTML 변환)은 PDF 를 못 보이므로 그 자리에 이 PNG 를 쓴다. 원고의 ![](이름.pdf) 줄은 그대로다.': 'Puts a same-named PNG beside the PDF. ndhmd2html (HTML conversion) cannot show PDFs, so it uses this PNG instead. The ![](name.pdf) line in the manuscript stays as is.',
+    'HTML용 PNG 를 만들지 못했습니다: {}': 'Could not make the PNG for HTML: {0}',
+    'ndhmd2html 를 찾지 못했습니다': 'ndhmd2html not found',
+    'PATH 와 ndhmd4tex 가 있는 폴더에 ndhmd2html 이 없습니다. 위치를 지정해 주세요.': 'ndhmd2html is not on PATH or beside ndhmd4tex. Please locate it.',
+    'ndhmd2html 위치': 'Locate ndhmd2html',
+    'HTML 변환 실패': 'HTML conversion failed',
+    'HTML 변환 — 알림': 'HTML conversion — notes',
+    'HTML 열기': 'Open HTML',
+    '변환한 HTML 이 아직 없습니다.': 'No converted HTML yet.',
+    'ndhmd2html 를 실행하지 못했습니다.': 'Could not run ndhmd2html.',
     '실행 전 확인': 'Confirm before run',
     '외부 도구 실행 — {}': 'Run external tool — {0}',
     '대상: {} · {}자': 'Target: {0} · {1} chars',
