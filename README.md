@@ -132,6 +132,7 @@ Bug reports are welcome.
 ndhmdSuite is an all-in-one installer designed to set up the ndhmd environment on Windows. It includes the following components:
 
 - **ndhmd4tex**: A command-line utility that parses the ndhmarkdown language and converts it into TeX.
+- **ndhmd2html**: A command-line utility that converts ndhmarkdown into (X)HTML.
 - **ndhmdsync**: A utility that enables inverse and forward search between the editor and the PDF viewer.
 - **ndhmdWriter**: A dedicated editor for ndhmd.
 - **ksruncltex**: A cluttex wrapper used for compilation.
