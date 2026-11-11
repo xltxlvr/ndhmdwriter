@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.6.1"
+__version__ = "0.6.4"
 
 from contextlib import contextmanager
 
@@ -6328,6 +6328,10 @@ class Prefs:
         v = self.s.value("prefs/jigsaw_engine", "xelatex", type=str)
         return v if v in JigsawFigure.ENGINES else "xelatex"
 
+    def extra_path(self) -> str:
+        """`ndhmd PATH` — 도구를 찾을 때 PATH 앞에 임시로 얹을 폴더들(한 줄에 하나)."""
+        return self.s.value("prefs/extra_path", "", type=str)
+
     def jigsaw_png(self) -> bool:
         """조각 그림을 저장할 때 HTML 용 PNG 를 PDF 옆에 함께 만들지."""
         return self.s.value("prefs/jigsaw_png", True, type=bool)
@@ -6533,8 +6537,23 @@ class PreferencesDialog(QDialog):
         self.setWindowTitle("설정")
         self.setMinimumWidth(420)
 
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
+        # 항목이 많아 한 장으로는 작은 화면에서 잘리므로 쪽(탭)으로 나눈다. 각 쪽은 스크롤도 되어,
+        # 아주 낮은 화면에서도 아래가 잘리지 않는다. 아래 코드는 `form` 을 쪽마다 바꿔 가며 채운다.
+        self.tabs = QTabWidget()
+        self._pages = []
+
+        def new_page(title: str) -> QFormLayout:
+            body = QWidget()
+            f = QFormLayout(body)
+            f.setLabelAlignment(Qt.AlignRight)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setWidget(body)
+            self.tabs.addTab(scroll, _T(title))
+            return f
+
+        form = new_page("편집")
 
         # -- 글꼴 --
         self.font_combo = FontFamilyCombo()
@@ -6577,7 +6596,7 @@ class PreferencesDialog(QDialog):
         form.addRow("", self.tab_to_spaces)
 
         # -- 목록 항목 간격(표시 전용) --
-        self.item_gap = QCheckBox("설명 목록 항목 사이 간격 (화면 표시만)")
+        self.item_gap = QCheckBox("설명 목록 항목 사이를 벌려 보기 (화면 표시만)")
         self.item_gap.setChecked(self.prefs.item_gap())
         self.item_gap.setToolTip(
             "ndhmd4tex 는 목록 항목 사이의 빈 줄을 허용하지 않습니다. 대신 `항목 :: 설명` 줄의\n"
@@ -6595,13 +6614,16 @@ class PreferencesDialog(QDialog):
         gap_row.addWidget(self.item_gap)
         gap_row.addWidget(self.item_gap_scale)
         gap_row.addStretch(1)
-        form.addRow("", gap_row)
-        self.item_gap_bullets = QCheckBox("글머리표·번호 목록에도 적용")
+        form.addRow("목록 항목 간격", gap_row)
+        self.item_gap_bullets = QCheckBox("글머리표·번호 목록의 항목 사이도 벌려 보기")
         self.item_gap_bullets.setChecked(self.prefs.item_gap_bullets())
         self.item_gap_bullets.setToolTip("`- `, `1. ` 뒤의 공백을 키웁니다. 위 항목이 꺼져 있으면 무시됩니다.")
         self.item_gap_bullets.setEnabled(self.item_gap.isChecked())
         self.item_gap.toggled.connect(self.item_gap_bullets.setEnabled)
-        form.addRow("", self.item_gap_bullets)
+        bullets_row = QHBoxLayout()
+        bullets_row.setContentsMargins(22, 0, 0, 0)       # 위 항목의 하위 선택임을 들여쓰기로 보인다
+        bullets_row.addWidget(self.item_gap_bullets)
+        form.addRow("", bullets_row)
 
         # -- 한자 변환 --
         self.hanja_recent = QCheckBox("한자 변환: 최근 입력한 한자 우선")
@@ -6621,6 +6643,8 @@ class PreferencesDialog(QDialog):
         # 두 병기는 함께 쓸 수 없다 — 하나를 켜면 다른 하나는 꺼진다.
         self.hanja_paren.toggled.connect(lambda on: on and self.hanja_hg.setChecked(False))
         self.hanja_hg.toggled.connect(lambda on: on and self.hanja_paren.setChecked(False))
+
+        form = new_page("화면·기타")
 
         # -- 창 크기·위치 --
         self.remember_geometry = QCheckBox("창 크기·위치 기억")
@@ -6723,7 +6747,7 @@ class PreferencesDialog(QDialog):
         self.theme_combo.setCurrentIndex(max(0, idx))
         form.addRow("테마", self.theme_combo)
 
-        form.addRow(self._divider())
+        form = new_page("컴파일·도구")
 
         # -- 인버스 서치 --
         #
@@ -6791,6 +6815,15 @@ class PreferencesDialog(QDialog):
             "엽니다. 시스템 뷰어와 등록한 뷰어가 다를 때 둘이 함께 뜨는 일이 없습니다.\n"
             "정방향 검색이 안 되는 경우(예: 하위 원고만 컴파일)에는 PDF만 연다.")
         form.addRow("컴파일 뒤", self.after_compile_combo)
+        self.extra_path = QPlainTextEdit(self.prefs.extra_path())
+        self.extra_path.setFixedHeight(64)
+        self.extra_path.setTabChangesFocus(True)
+        self.extra_path.setPlaceholderText("/Users/me/bin\n/opt/texlive/2025/bin/universal-darwin")
+        self.extra_path.setToolTip(
+            "ndhmd4tex·ndhmd2html·ndhmdsync·TeX·외부 도구를 찾을 폴더를 한 줄에 하나씩 적는다.\n"
+            "이 앱이 돌아가는 동안만 PATH 의 맨 앞에 얹으며 시스템 설정은 바꾸지 않는다.\n"
+            "저장하면 곧바로 적용된다. 존재하지 않는 폴더는 무시한다.")
+        form.addRow("ndhmd PATH", self.extra_path)
 
         self.animation = QCheckBox("애니메이션 gif/webp 를 움직이게 넣기 (--animation)")
         self.animation.setChecked(self.prefs.animation())
@@ -6819,9 +6852,9 @@ class PreferencesDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         box = QVBoxLayout(self)
-        box.addLayout(form)
-        box.addStretch(1)
+        box.addWidget(self.tabs, 1)
         box.addWidget(buttons)
+        self.resize(max(self.width(), 680), 460)       # 낮은 화면에서도 들어가는 기본 높이
 
     def _divider(self):
         line = QLabel()
@@ -6924,7 +6957,9 @@ class PreferencesDialog(QDialog):
             hanja_recent_first=self.hanja_recent.isChecked(),
             hanja_parenthesize=self.hanja_paren.isChecked(),
             hanja_hangul_first=self.hanja_hg.isChecked(),
+            extra_path=self.extra_path.toPlainText().strip(),
         )
+        apply_extra_path(self.extra_path.toPlainText())
         self._win.apply_preferences()
         super().accept()
 
@@ -16643,6 +16678,7 @@ class MainWindow(QMainWindow):
         self._pre_fullscreen_geometry = None
         self._settings = QSettings(self.ORG, self.APP)
         self.prefs = Prefs(self._settings)
+        apply_extra_path(self.prefs.extra_path())       # 도구를 찾기 전에 PATH 에 얹는다
 
         saved = self._settings.value("workspace/root", "")
         self.workspace = Workspace(Path(saved)) if saved else Workspace()
@@ -23217,6 +23253,35 @@ def _fix_macos_path():
     os.environ["PATH"] = os.pathsep.join(prepend + parts)
 
 
+_BASE_PATH = None      # 사용자 폴더를 얹기 전의 PATH(다시 적용해도 쌓이지 않게 기억해 둔다)
+
+
+def parse_extra_path(text: str) -> list:
+    """`ndhmd PATH` 칸의 글을 폴더 목록으로. 줄바꿈이나 PATH 구분자(`:` / `;`)로 가르고,
+    `~` 를 풀고, 중복을 뺀다. 존재 여부는 여기서 따지지 않는다."""
+    out, seen = [], set()
+    for chunk in re.split(r"[\n;]|" + re.escape(os.pathsep), text or ""):
+        d = os.path.expanduser(chunk.strip().strip('"'))
+        if d and d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+def apply_extra_path(text: str) -> list:
+    """사용자가 적은 폴더를 이 프로세스의 PATH 맨 앞에 얹는다(앱을 끄면 사라지는 임시 변경 —
+    시스템 설정은 건드리지 않는다). PATH 를 보는 모든 것(ndhmd4tex·ndhmd2html·ndhmdsync·TeX·
+    외부 도구·AI 도우미)이 이 폴더를 먼저 본다. 여러 번 불러도 쌓이지 않는다.
+    실제로 얹은(존재하는) 폴더 목록을 돌려준다."""
+    global _BASE_PATH
+    if _BASE_PATH is None:
+        _BASE_PATH = os.environ.get("PATH", "")
+    dirs = [d for d in parse_extra_path(text) if os.path.isdir(d)]
+    base = [x for x in _BASE_PATH.split(os.pathsep) if x]
+    os.environ["PATH"] = os.pathsep.join(dirs + [x for x in base if x not in dirs])
+    return dirs
+
+
 # =============================================================================
 # 다국어(i18n) — 한국어 / English
 # =============================================================================
@@ -23269,7 +23334,10 @@ _EN = {
     '변환': 'Convert',
     '이 파일만': 'This file only',
     'HTML 변환': 'HTML conversion',
+    '화면·기타': 'View & misc',
+    '컴파일·도구': 'Compile & tools',
     'HTML용 PNG도 만들기': 'Also make PNG for HTML',
+    'ndhmd4tex·ndhmd2html·ndhmdsync·TeX·외부 도구를 찾을 폴더를 한 줄에 하나씩 적는다.\n이 앱이 돌아가는 동안만 PATH 의 맨 앞에 얹으며 시스템 설정은 바꾸지 않는다.\n저장하면 곧바로 적용된다. 존재하지 않는 폴더는 무시한다.': 'Enter folders to search for ndhmd4tex, ndhmd2html, ndhmdsync, TeX and external tools, one per line.\nThey are put at the front of PATH only while this app runs; system settings are not changed.\nApplied as soon as you save. Folders that do not exist are ignored.',
     'PDF 옆에 같은 이름의 PNG 를 둔다. ndhmd2html(HTML 변환)은 PDF 를 못 보이므로 그 자리에 이 PNG 를 쓴다. 원고의 ![](이름.pdf) 줄은 그대로다.': 'Puts a same-named PNG beside the PDF. ndhmd2html (HTML conversion) cannot show PDFs, so it uses this PNG instead. The ![](name.pdf) line in the manuscript stays as is.',
     'HTML용 PNG 를 만들지 못했습니다: {}': 'Could not make the PNG for HTML: {0}',
     'ndhmd2html 를 찾지 못했습니다': 'ndhmd2html not found',
@@ -23481,7 +23549,9 @@ _EN = {
     '설명 목록 항목 사이 간격 (화면 표시만)': 'Spacing between description-list items (display only)',
     'ndhmd4tex 는 목록 항목 사이의 빈 줄을 허용하지 않습니다. 대신 `항목 :: 설명` 줄의\n`::` 앞 공백 한 글자를 크게 그려 그 줄을 높입니다. 원고 내용·줄 번호·실행 취소에는\n영향이 없고 화면에서만 항목이 벌어져 보입니다. 기본은 꺼져 있습니다.': 'ndhmd4tex does not allow blank lines between list items. Instead, the single space before `::` in an `item :: description` line is drawn larger to make that line taller. The manuscript text, line numbers and undo are unaffected; items only look more spread out on screen. Off by default.',
     ' 배': '×',
-    '글머리표·번호 목록에도 적용': 'Also apply to bulleted/numbered lists',
+    '글머리표·번호 목록의 항목 사이도 벌려 보기': 'Also space out bulleted/numbered list items',
+    '설명 목록 항목 사이를 벌려 보기 (화면 표시만)': 'Space out description-list items (display only)',
+    '목록 항목 간격': 'List item spacing',
     '`- `, `1. ` 뒤의 공백을 키웁니다. 위 항목이 꺼져 있으면 무시됩니다.': 'Enlarges the space after `- ` and `1. `. Ignored if the option above is off.',
     '한자 변환: 최근 입력한 한자 우선': 'Hanja conversion: prefer recently used hanja',
     'F9 후보 창에서 한 번 고른 한자를 같은 읽기의 후보 맨 앞으로 올립니다.\n예: `가` 에서 歌 를 골랐으면 다음부터 歌 가 먼저 나옵니다.': 'A hanja picked once in the F9 candidate window moves to the front of the candidates for the same reading.\nExample: if you chose 歌 for `가`, 歌 comes first from then on.',
