@@ -6,7 +6,7 @@ PySide6, ships as a single file, and is designed around writing long, structured
 Korean-language manuscripts: books made of chapters, with cross-references,
 bibliographies, math, figures and tables.
 
-Version **0.6.5** · Author: Nova de Hi · License: MIT
+Version **0.7.1** · Author: Nova de Hi · License: MIT
 
 The UI is available in **Korean** (default) and **English**
 (*Settings ▸ Language*, applied on restart). The user manual (`MANUAL.md`) is
