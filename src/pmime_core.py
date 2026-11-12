@@ -6,6 +6,7 @@
 # pmimegui.py(PyQt6 단독 앱)와 ndhmdWriter.py(PySide6 보조 입력기)가 함께 쓰는 코어.
 # 변환 규칙·사전은 오직 여기서만 고친다. GUI/클립보드 코드는 이 파일에 없다.
 #
+# version 0.20.0 (2026-11-13), 아랍어 엔진 ar(`%ar`, Buckwalter + 쿠란 부호 → 아랍 문자 NFC) 추가
 # version 0.19.0 (2026-11-12), 히브리어 엔진 he(`%he`, Michigan–Claremont 방식 → 마소라 히브리어) 추가
 # version 0.18.0 (2026-11-12), 고전 그리스어 엔진 grc(`%grc`, Beta Code → 폴리토닉 그리스어 NFC) 추가
 # version 0.13.2 (2026-10-22), 사용자 한자 사전 API(add/update/delete_custom_word), 사용자 데이터 폴더, 삭제 반영 버그 수정
@@ -18,7 +19,7 @@ import unicodedata
 import re
 import json
 
-__version__ = "0.19.0"
+__version__ = "0.20.0"
 
 def resource_path(relative_path):
     try:
@@ -1292,6 +1293,28 @@ def betacode_to_hebrew(text):
     return unicodedata.normalize("NFC", "".join(chars))
 
 
+# ── 아랍어 (Buckwalter 방식, 쿠란 표기 확장 포함) ───────────────────────────
+# 자음·모음 부호가 1:1 로 대응하는 ASCII 표기(대소문자 구분). 쿠란 전용 부호는 Tanzil/쿠란 코퍼스 관례를 따른다.
+_AR_MAP = {
+    "'": "\u0621", "|": "\u0622", ">": "\u0623", "&": "\u0624", "<": "\u0625", "}": "\u0626",
+    "A": "\u0627", "b": "\u0628", "p": "\u0629", "t": "\u062A", "v": "\u062B", "j": "\u062C",
+    "H": "\u062D", "x": "\u062E", "d": "\u062F", "*": "\u0630", "r": "\u0631", "z": "\u0632",
+    "s": "\u0633", "$": "\u0634", "S": "\u0635", "D": "\u0636", "T": "\u0637", "Z": "\u0638",
+    "E": "\u0639", "g": "\u063A", "_": "\u0640", "f": "\u0641", "q": "\u0642", "k": "\u0643",
+    "l": "\u0644", "m": "\u0645", "n": "\u0646", "h": "\u0647", "w": "\u0648", "Y": "\u0649",
+    "y": "\u064A", "F": "\u064B", "N": "\u064C", "K": "\u064D", "a": "\u064E", "u": "\u064F",
+    "i": "\u0650", "~": "\u0651", "o": "\u0652", "`": "\u0670", "{": "\u0671",
+    "^": "\u0653", "#": "\u0654",
+    ":": "\u06DC", "@": "\u06DF", '"': "\u06E0", "[": "\u06E2", ";": "\u06E3", ",": "\u06E5",
+    ".": "\u06E6", "!": "\u06E8", "-": "\u06EA", "+": "\u06EB", "%": "\u06EC", "]": "\u06ED",
+}
+
+
+def buckwalter_to_arabic(text):
+    """Buckwalter 로마자 → 아랍 문자(NFC). 표에 없는 글자(공백·한글 등)는 그대로 둔다."""
+    return unicodedata.normalize("NFC", "".join(_AR_MAP.get(c, c) for c in text))
+
+
 def convert_text(text, engine_mode="pm"):
     if not text: return ""
 
@@ -1300,6 +1323,8 @@ def convert_text(text, engine_mode="pm"):
         return betacode_to_greek(text)
     if engine_mode == "he":
         return betacode_to_hebrew(text)
+    if engine_mode == "ar":
+        return buckwalter_to_arabic(text)
 
     # 한글 자판으로 잘못 친 영문 되돌리기 — 입력이 이미 한글이므로 LaTeX 확장·로마자 보호를 거치지 않는다.
     if engine_mode == "dubeol_rev":
@@ -1526,11 +1551,11 @@ def delete_custom_word(key):
 # --------------------------------------------------------------------------
 # 입력 전체(여러 줄, 행별 % 태그 포함) 변환 — GUI/Writer 공통
 # --------------------------------------------------------------------------
-ENGINE_MODES = ["pm", "frkim", "pmfrk", "rrk", "dubeol", "dubeol_rev", "kana", "grc", "he", "transparent"]
+ENGINE_MODES = ["pm", "frkim", "pmfrk", "rrk", "dubeol", "dubeol_rev", "kana", "grc", "he", "ar", "transparent"]
 HANJA_MODES = ["none", "shinjitai", "kyujitai", "simplified", "hanja"]
 
-_LINE_TAG_RE = re.compile(r"^%(pm|frk|mix|rrk|du|ed|jp|grc|he|clean|uc|lc|tc)(?:\[(shin|kyu|sim|none|han)\])?")
-_TAG_MODE = {"pm": "pm", "frk": "frkim", "mix": "pmfrk", "rrk": "rrk", "du": "dubeol", "ed": "dubeol_rev", "jp": "kana", "grc": "grc", "he": "he", "clean": "transparent"}
+_LINE_TAG_RE = re.compile(r"^%(pm|frk|mix|rrk|du|ed|jp|grc|he|ar|clean|uc|lc|tc)(?:\[(shin|kyu|sim|none|han)\])?")
+_TAG_MODE = {"pm": "pm", "frk": "frkim", "mix": "pmfrk", "rrk": "rrk", "du": "dubeol", "ed": "dubeol_rev", "jp": "kana", "grc": "grc", "he": "he", "ar": "ar", "clean": "transparent"}
 #: 대소문자 태그 — `%uc` 대문자, `%lc` 소문자, `%tc` 낱말마다 첫 글자만 대문자(나머지는 그대로).
 #: 변환 방식은 언제나 `clean`(transparent)이다: LaTeX 입력 확장만 하고, 그 결과에 대소문자를 적용한다.
 #: 태그를 쓰지 않는 한 켜지지 않으며 입력기 콤보에도 없다.
@@ -1585,7 +1610,7 @@ def convert_input(text, engine_mode="pm", hanja_mode="none", norm_mode="NFD"):
         if case:
             conv = apply_case(conv, case)
         conv = filter_kanji(conv, hanja_mode=hmode)
-        if mode not in ("kana", "grc", "he"):       # 가나·그리스어는 한글 자모 정규화를 거치지 않는다
+        if mode not in ("kana", "grc", "he", "ar"):       # 가나·그리스어는 한글 자모 정규화를 거치지 않는다
             conv = normalize_output(conv, norm_mode=norm_mode)
         out.append(conv)
     return "\n".join(out)

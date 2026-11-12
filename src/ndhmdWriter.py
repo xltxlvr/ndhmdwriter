@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 from contextlib import contextmanager
 
@@ -7258,14 +7258,14 @@ def load_pmime_core():
 class PmImePanel(QDialog):
     """한·중·일 문자 입력기. 로마자로 쓰면 아래 칸에 바로 변환되고, 삽입하면 편집창의
     커서 위치에 들어간다(선택이 있으면 그것을 대체). 변환은 pmIME 코어(pmime_core.py)가
-    한다. 줄 첫머리에 `%pm` `%frk` `%mix` `%rrk` `%du` `%ed` `%jp` `%grc` `%he` `%clean`(+`[shin]` 등 한자 필터)을
+    한다. 줄 첫머리에 `%pm` `%frk` `%mix` `%rrk` `%du` `%ed` `%jp` `%grc` `%he` `%ar` `%clean`(+`[shin]` 등 한자 필터)을
     쓰면 그 줄만 다른 엔진으로 변환된다. `%uc` `%lc` `%tc`는 변환 없이 대문자/소문자/낱말마다 첫 글자 대문자로 바꾼다.
 
     Enter = 삽입(비우기가 켜져 있으면 편집창으로 포커스 복귀), Shift+Enter = 줄바꿈, Esc = 창 닫기, Alt+Z = 방금 삽입한 입력 되살리기.
     기본 정규화는 NFC(완성형 음절)이다. 옛한글처럼 조합되지 않는 자모는 NFC에서도 자모로 남는다."""
 
     ENGINES = [("pm", "pm (%pm)"), ("frkim", "frkim (%frk)"), ("pmfrk", "mix (%mix)"),
-               ("rrk", "rrk-ex (%rrk)"), ("dubeol", "두벌식 (%du)"), ("dubeol_rev", "한글자판→영문 (%ed)"), ("kana", "かな (%jp)"), ("grc", "고전 그리스어 Beta Code (%grc)"), ("he", "마소라 히브리어 Michigan–Claremont (%he)"), ("transparent", "변환 없음 (%clean)")]
+               ("rrk", "rrk-ex (%rrk)"), ("dubeol", "두벌식 (%du)"), ("dubeol_rev", "한글자판→영문 (%ed)"), ("kana", "かな (%jp)"), ("grc", "고전 그리스어 Beta Code (%grc)"), ("he", "마소라 히브리어 Michigan–Claremont (%he)"), ("ar", "아랍어 Buckwalter (%ar)"), ("transparent", "변환 없음 (%clean)")]
     HANJA = [("none", "한자 필터 없음"), ("shinjitai", "新字体 (shin)"), ("kyujitai", "舊字體 (kyu)"),
              ("simplified", "简体 (sim)"), ("hanja", "한자 (han)")]
 
@@ -13849,7 +13849,7 @@ class HelpDialog(QDialog):
         html = f"""
         <h2 style="margin-bottom:2px">ndhmdWriter</h2>
         <div style="color:#7a7368">버전 {__version__}</div>
-        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.21.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
+        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.21.1, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
         <p>
         지은이: {APP_AUTHOR}<br>
         라이선스: {APP_LICENSE}
@@ -21793,6 +21793,9 @@ class MainWindow(QMainWindow):
         if engine == "grc":
             # Beta Code 는 `ou)` `a)/` `*(o` 처럼 `)` `(` `=` `|` `\\` `+` `'` `*` 가 낱말의 일부다.
             lead, trail = "[\"<_", "]\">_.,;:!?"
+        elif engine == "ar":
+            # Buckwalter 는 ASCII 기호(`' | > & < } ~ ` { : ; , . ! - + %` 등)가 모두 글자·부호다.
+            lead, trail = "\"<", "\">"
         elif engine == "he":
             # 히브리어는 `:`(쉬와) `.`(다게쉬) `,`(처레) `;`(소프 파숙) `-`(막케프) 가 낱말의 일부다.
             lead, trail = "[\"<_", "]\">_"
@@ -23436,6 +23439,7 @@ _EN = {
     '컴파일·도구': 'Compile & tools',
     '바뀐 곳이 없습니다': 'nothing changed',
     '고전 그리스어 Beta Code (%grc)': 'Ancient Greek Beta Code (%grc)',
+    '아랍어 Buckwalter (%ar)': 'Arabic Buckwalter (%ar)',
     '마소라 히브리어 Michigan–Claremont (%he)': 'Masoretic Hebrew Michigan–Claremont (%he)',
     '글자 정규화(&N)': 'Text &normalization',
     '글자 정규화': 'Text normalization',
