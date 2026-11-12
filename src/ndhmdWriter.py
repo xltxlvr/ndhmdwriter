@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.6.4"
+__version__ = "0.6.5"
 
 from contextlib import contextmanager
 
@@ -2969,6 +2969,7 @@ class Editor(QPlainTextEdit):
 
             host.add_ai_menu(menu, cursor)
             host.add_ext_tool_menu(menu, cursor)
+            host.fill_normalize_menu(menu.addMenu("글자 정규화"), cursor)
             lookup_text = selected_text.replace("\u2029", " ").strip()
             lookup_menu = menu.addMenu("찾아보기…")
             google_action = lookup_menu.addAction("Google에서 찾기")
@@ -6216,6 +6217,58 @@ class NdhmdSyncTool:
         if tool.suffix.lower() == ".py":
             return [sys.executable, str(tool), *args]
         return [str(tool), *args]
+
+
+# -- 글자 정규화 ---------------------------------------------------------------
+#
+# 전체에 NFC/NFD 를 걸면 한글 말고도 바뀐다(호환 한자가 통합 한자로, 옴·옹스트롬 기호가 일반
+# 글자로 …). 그래서 "한글만" 건드리는 변환과 "호환 한자만" 바꾸는 변환을 따로 둔다.
+# 옛한글(한양 PUA)은 kotex-utils 의 jamo-normalize 를 외부 도구로 부른다.
+
+_HANGUL_RUN_RE = re.compile("[\uAC00-\uD7A3\u1100-\u11FF\uA960-\uA97F\uD7B0-\uD7FF]+")
+_JAMO_RE = re.compile("[\u1100-\u11FF\uA960-\uA97F\uD7B0-\uD7FF]")
+_SYLLABLE_RUN_RE = re.compile("[\uAC00-\uD7A3]+")
+_COMPAT_IDEO_RE = re.compile("[\uF900-\uFAFF\U0002F800-\U0002FA1F]")
+
+
+def _normalize_apply(text: str, regex, fn) -> list:
+    """regex 에 걸린 구간마다 fn(구간) 을 부른다. 바뀐 것만 (시작 UTF-16 위치, 길이, 새 글) 으로 돌려준다.
+    위치는 Qt 문서 기준(UTF-16 단위)이라 글자가 둘로 세어지는 평면 밖 글자도 어긋나지 않는다."""
+    out, last, units = [], 0, 0
+    for m in regex.finditer(text):
+        a, b = m.span()
+        new = fn(m.group())
+        if new == m.group():
+            continue
+        units += len(text[last:a].encode("utf-16-le")) // 2
+        out.append((units, len(m.group().encode("utf-16-le")) // 2, new))
+        units += len(m.group().encode("utf-16-le")) // 2
+        last = b
+    return out
+
+
+def hangul_nfc_changes(text: str) -> list:
+    """한글 자모가 이어진 곳을 완성형 음절로 합친다(옛한글처럼 완성형이 없는 자모열은 자모로 남는다)."""
+    return _normalize_apply(text, _HANGUL_RUN_RE,
+                            lambda r: unicodedata.normalize("NFC", r) if _JAMO_RE.search(r) else r)
+
+
+def hangul_nfd_changes(text: str) -> list:
+    """완성형 한글 음절을 자모로 푼다(NFD)."""
+    return _normalize_apply(text, _SYLLABLE_RUN_RE, lambda r: unicodedata.normalize("NFD", r))
+
+
+def compat_ideograph_changes(text: str) -> list:
+    """호환 한자(U+F900대 · U+2F800대)를 같은 글자의 통합 한자로 바꾼다.
+    이미 통합 한자인 12자(U+FA0E 등)는 그대로 둔다."""
+    return _normalize_apply(text, _COMPAT_IDEO_RE, lambda r: unicodedata.normalize("NFC", r))
+
+
+NORMALIZE_KINDS = {
+    "nfc": ("한글 NFC로 합치기", hangul_nfc_changes),
+    "nfd": ("한글 NFD로 풀기", hangul_nfd_changes),
+    "compat": ("호환 한자 → 통합 한자", compat_ideograph_changes),
+}
 
 
 class Ndhmd2htmlTool:
@@ -16985,6 +17038,8 @@ class MainWindow(QMainWindow):
         act(m, "메모(&M)…", "Ctrl+Alt+M", self.open_note_panel)
         act(m, "약어 슬롯(&Y)…", "Ctrl+Alt+Y", self.open_slot_dialog)
         act(m, "AI 도우미 설정(실험)…", None, self.open_ai_settings)
+        self._norm_menu = m.addMenu("글자 정규화(&N)")
+        self.fill_normalize_menu(self._norm_menu)
         self._ext_menu = m.addMenu("외부 도구(&Z)")
         self._ext_menu.aboutToShow.connect(lambda: self.fill_ext_tool_menu(self._ext_menu))
         self.fill_ext_tool_menu(self._ext_menu)
@@ -22352,6 +22407,39 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction("설정…", self.open_ext_tool_settings)
 
+    def fill_normalize_menu(self, menu, cursor: QTextCursor = None):
+        for key in ("nfc", "nfd", "compat"):
+            menu.addAction(_T(NORMALIZE_KINDS[key][0]),
+                           lambda k=key, c=cursor: self.normalize_text(k, c))
+        menu.addSeparator()
+        hint = menu.addAction(_T("옛한글(한양 PUA)은 외부 도구 jamo-normalize -o"))
+        hint.setEnabled(False)
+
+    def normalize_text(self, kind: str, cursor: QTextCursor = None):
+        """선택 범위(없으면 현재 파일 전체)에서 kind 에 맞게 글자를 정규화한다. 한 번에 실행 취소된다."""
+        label, fn = NORMALIZE_KINDS[kind]
+        sel = QTextCursor(cursor) if cursor is not None else QTextCursor(self.editor.textCursor())
+        if sel.hasSelection():
+            base, whole = min(sel.anchor(), sel.position()), False
+            text = sel.selectedText()
+        else:
+            base, whole = 0, True
+            text = self.editor.toPlainText()
+        changes = fn(text)
+        scope = _T("현재 파일 전체") if whole else _T("선택 범위")
+        if not changes:
+            self.statusBar().showMessage(f"{_T(label)}: {scope} — {_T('바뀐 곳이 없습니다')}", 4000)
+            return
+        doc = self.editor.document()
+        edit = QTextCursor(doc)
+        edit.beginEditBlock()
+        for pos, length, new in reversed(changes):      # 뒤에서부터 고쳐야 앞쪽 위치가 변하지 않는다
+            edit.setPosition(base + pos)
+            edit.setPosition(base + pos + length, QTextCursor.KeepAnchor)
+            edit.insertText(new)
+        edit.endEditBlock()
+        self.statusBar().showMessage(f"{_T(label)}: {scope} — {len(changes):,}{_T('곳을 바꿨습니다')}", 6000)
+
     def add_ext_tool_menu(self, menu, cursor):
         sub = menu.addMenu("외부 도구")
         self.fill_ext_tool_menu(sub, cursor)
@@ -23336,6 +23424,14 @@ _EN = {
     'HTML 변환': 'HTML conversion',
     '화면·기타': 'View & misc',
     '컴파일·도구': 'Compile & tools',
+    '바뀐 곳이 없습니다': 'nothing changed',
+    '글자 정규화(&N)': 'Text &normalization',
+    '글자 정규화': 'Text normalization',
+    '한글 NFC로 합치기': 'Hangul: compose to NFC',
+    '한글 NFD로 풀기': 'Hangul: decompose to NFD',
+    '호환 한자 → 통합 한자': 'Compatibility ideographs → unified ideographs',
+    '옛한글(한양 PUA)은 외부 도구 jamo-normalize -o': 'Old Hangul (Hanyang PUA): use external tool jamo-normalize -o',
+    '곳을 바꿨습니다': ' place(s) changed',
     'HTML용 PNG도 만들기': 'Also make PNG for HTML',
     'ndhmd4tex·ndhmd2html·ndhmdsync·TeX·외부 도구를 찾을 폴더를 한 줄에 하나씩 적는다.\n이 앱이 돌아가는 동안만 PATH 의 맨 앞에 얹으며 시스템 설정은 바꾸지 않는다.\n저장하면 곧바로 적용된다. 존재하지 않는 폴더는 무시한다.': 'Enter folders to search for ndhmd4tex, ndhmd2html, ndhmdsync, TeX and external tools, one per line.\nThey are put at the front of PATH only while this app runs; system settings are not changed.\nApplied as soon as you save. Folders that do not exist are ignored.',
     'PDF 옆에 같은 이름의 PNG 를 둔다. ndhmd2html(HTML 변환)은 PDF 를 못 보이므로 그 자리에 이 PNG 를 쓴다. 원고의 ![](이름.pdf) 줄은 그대로다.': 'Puts a same-named PNG beside the PDF. ndhmd2html (HTML conversion) cannot show PDFs, so it uses this PNG instead. The ![](name.pdf) line in the manuscript stays as is.',
