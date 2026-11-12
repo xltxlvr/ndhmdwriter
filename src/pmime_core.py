@@ -6,6 +6,8 @@
 # pmimegui.py(PyQt6 단독 앱)와 ndhmdWriter.py(PySide6 보조 입력기)가 함께 쓰는 코어.
 # 변환 규칙·사전은 오직 여기서만 고친다. GUI/클립보드 코드는 이 파일에 없다.
 #
+# version 0.19.0 (2026-11-12), 히브리어 엔진 he(`%he`, Michigan–Claremont 방식 → 마소라 히브리어) 추가
+# version 0.18.0 (2026-11-12), 고전 그리스어 엔진 grc(`%grc`, Beta Code → 폴리토닉 그리스어 NFC) 추가
 # version 0.13.2 (2026-10-22), 사용자 한자 사전 API(add/update/delete_custom_word), 사용자 데이터 폴더, 삭제 반영 버그 수정
 # version 0.13.1 (2026-10-21), pmimegui.py 에서 코어를 분리 (동작 변경 없음; 데이터 폴더 지정 추가)
 #
@@ -16,7 +18,7 @@ import unicodedata
 import re
 import json
 
-__version__ = "0.17.1"
+__version__ = "0.19.0"
 
 def resource_path(relative_path):
     try:
@@ -1169,8 +1171,135 @@ def expand_datetime_tokens(text, now=None):
     return _DT_BRACE_RE.sub(repl, text)
 
 
+# --------------------------------------------------------------------------
+# 고전 그리스어(Beta Code → 폴리토닉 그리스어)
+# --------------------------------------------------------------------------
+# TLG·Perseus 의 Beta Code 를 쓴다. 글자 뒤에 기호를 붙인다: `a)/nqrwpos` → ἄνθρωπος.
+#   글자  a b g d e z h q i k l m n c o p r s t u f x y w v(ϝ)
+#   기호  )부드러운 숨  (거센 숨  /예음  \억음  =곡절  +분음  |아래 iota
+#   대문자  `*` 를 글자 앞에(`*a`, 기호는 `*` 와 글자 사이 `*)/a` 이거나 글자 뒤 `*a)/`) 두거나, 영문 대문자(`A`)
+#   시그마  `s` 는 낱말 끝에서 ς, 그 밖에서 σ. `s1`=σ  `s2`=ς  `s3`=ϲ(달 모양) 로 강제
+#   문장부호  `:` → · (ano teleia)   `'` → ’ (생략)   `;` 는 그대로(그리스어 물음표와 정규화로 같다)
+# 결합 기호는 정해진 차례(분음 → 숨 → 악센트 → 아래 iota)로 세운 뒤 NFC 로 완성형(U+1F00대)으로 합친다.
+_GRC_LETTERS = {
+    "a": "α", "b": "β", "g": "γ", "d": "δ", "e": "ε", "z": "ζ", "h": "η", "q": "θ", "i": "ι",
+    "k": "κ", "l": "λ", "m": "μ", "n": "ν", "c": "ξ", "o": "ο", "p": "π", "r": "ρ", "t": "τ",
+    "u": "υ", "f": "φ", "x": "χ", "y": "ψ", "w": "ω", "v": "ϝ",
+}
+_GRC_CAPITALS = {k: unicodedata.normalize("NFC", v.upper()) for k, v in _GRC_LETTERS.items()}
+_GRC_CAPITALS["v"] = "Ϝ"
+_GRC_MARKS = {")": "\u0313", "(": "\u0314", "/": "\u0301", "\\": "\u0300", "=": "\u0342",
+              "+": "\u0308", "|": "\u0345"}
+_GRC_RANK = {"\u0308": 0, "\u0313": 1, "\u0314": 1, "\u0300": 2, "\u0301": 2, "\u0342": 2, "\u0345": 3}
+_GRC_RE = re.compile(
+    r"(?:(?P<star>\*)(?P<pre>[)(/\\=+|]*))?"
+    r"(?:(?P<sig>[sS])(?P<sv>[123])|(?P<l>[A-Za-z]))"
+    r"(?P<post>[)(/\\=+|]*)")
+
+
+def betacode_to_greek(text):
+    """Beta Code 를 폴리토닉 그리스어(NFC)로. 변환표에 없는 글자(j 등)와 숫자·공백은 그대로 둔다."""
+    def repl(m):
+        letter = (m.group("sig") or m.group("l")).lower()
+        capital = bool(m.group("star")) or (m.group("sig") or m.group("l")).isupper()
+        marks = (m.group("pre") or "") + (m.group("post") or "")
+        if letter == "s":
+            sv = m.group("sv")
+            if sv == "3":
+                base = "Ϲ" if capital else "ϲ"
+            elif sv == "2":
+                base = "Σ" if capital else "ς"
+            elif sv == "1":
+                base = "Σ" if capital else "σ"
+            else:
+                src, a, b = m.string, m.start(), m.end()
+                prev_letter = a > 0 and (src[a - 1].isascii() and src[a - 1].isalpha() or src[a - 1] in ")(/\\=+|")
+                next_letter = b < len(src) and ((src[b].isascii() and src[b].isalpha()) or src[b] == "*")
+                final = prev_letter and not next_letter
+                base = "Σ" if capital else ("ς" if final else "σ")
+        elif letter in _GRC_LETTERS:
+            base = _GRC_CAPITALS[letter] if capital else _GRC_LETTERS[letter]
+        else:
+            return m.group(0)
+        seq = sorted((_GRC_MARKS[c] for c in marks), key=_GRC_RANK.get)
+        return base + "".join(seq)
+    out = _GRC_RE.sub(repl, text)
+    out = out.replace(":", "\u00b7").replace("'", "\u2019")
+    return unicodedata.normalize("NFC", out)
+
+
+# ── 마소라 히브리어 (Michigan–Claremont 방식) ──────────────────────────────
+# 자음 대문자, 모음·부호는 자음 뒤에 쓴다. 어말형(ך ם ן ף ץ)은 자동. 결과는 NFC(결합 부호는 정준 순서로 정렬).
+_HE_CONS = {")": "\u05D0", "B": "\u05D1", "G": "\u05D2", "D": "\u05D3", "H": "\u05D4",
+            "W": "\u05D5", "Z": "\u05D6", "X": "\u05D7", "+": "\u05D8", "Y": "\u05D9", "K": "\u05DB",
+            "L": "\u05DC", "M": "\u05DE", "N": "\u05E0", "S": "\u05E1", "(": "\u05E2", "P": "\u05E4",
+            "C": "\u05E6", "Q": "\u05E7", "R": "\u05E8", "T": "\u05EA"}
+_HE_FINAL = {"\u05DB": "\u05DA", "\u05DE": "\u05DD", "\u05E0": "\u05DF", "\u05E4": "\u05E3", "\u05E6": "\u05E5"}
+_HE_SIN = {"$": "\u05E9\u05C1", "#": "\u05E9\u05C2"}
+_HE_MARKS = {"A": "\u05B7", "F": "\u05B8", "E": "\u05B6", ",": "\u05B5", "I": "\u05B4",
+             "O": "\u05B9", "U": "\u05BB", ":": "\u05B0", ".": "\u05BC"}
+_HE_HATAF = {"A": "\u05B2", "E": "\u05B1", "F": "\u05B3"}
+
+
+def betacode_to_hebrew(text):
+    """Michigan–Claremont 식 로마자 → 마소라 히브리어(유니코드, NFC).
+    ) ב… 자음 + 모음 A F E , I O U : . ;  `$` `#` 은 쉰·씬, `-` 막케프, `;` 소프 파숙."""
+    out = []
+    n = len(text)
+    i = 0
+    last_cons = -1            # 자음 뒤인지(부호를 읽을 수 있는지)
+    while i < n:
+        ch = text[i]
+        u = ch.upper()
+        base = None
+        if u in _HE_CONS:
+            base = _HE_CONS[u]
+        elif ch in _HE_SIN:
+            base = _HE_SIN[ch]
+        if base is not None:
+            out.append(base)
+            last_cons = len(out) - 1
+            i += 1
+            continue
+        if last_cons >= 0:    # 자음 바로 뒤(또는 앞선 부호 뒤)의 부호
+            if ch == ":" and i + 1 < n and text[i + 1].upper() in _HE_HATAF:
+                out.append(_HE_HATAF[text[i + 1].upper()]); i += 2; continue
+            if ch in ".,:" or u in "AEIOUF":
+                out.append(_HE_MARKS[u]); i += 1; continue
+        if ch == "-":
+            out.append("\u05BE")
+        elif ch == ";":
+            out.append("\u05C3")
+        else:
+            out.append(ch)
+        # 자음이 아닌 글자(공백·구두점)는 낱말을 끊는다
+        last_cons = -1
+        i += 1
+    # 어말형: 낱말 안 마지막 자음 위치 찾기
+    res = "".join(out)
+    chars = list(res)
+    j = 0
+    L = len(chars)
+    while j < L:
+        c = chars[j]
+        if c in _HE_FINAL:
+            m = j + 1
+            while m < L and (0x0591 <= ord(chars[m]) <= 0x05C7) and chars[m] != "\u05BE" and chars[m] != "\u05C3":
+                m += 1
+            if m >= L or not ("\u05D0" <= chars[m] <= "\u05EA"):
+                chars[j] = _HE_FINAL[c]
+        j += 1
+    return unicodedata.normalize("NFC", "".join(chars))
+
+
 def convert_text(text, engine_mode="pm"):
     if not text: return ""
+
+    # 고전 그리스어 — Beta Code 의 `\` `/` `(` `)` 등이 LaTeX 확장·명령어 보호와 겹치므로 그 앞에서 끝낸다.
+    if engine_mode == "grc":
+        return betacode_to_greek(text)
+    if engine_mode == "he":
+        return betacode_to_hebrew(text)
 
     # 한글 자판으로 잘못 친 영문 되돌리기 — 입력이 이미 한글이므로 LaTeX 확장·로마자 보호를 거치지 않는다.
     if engine_mode == "dubeol_rev":
@@ -1397,11 +1526,11 @@ def delete_custom_word(key):
 # --------------------------------------------------------------------------
 # 입력 전체(여러 줄, 행별 % 태그 포함) 변환 — GUI/Writer 공통
 # --------------------------------------------------------------------------
-ENGINE_MODES = ["pm", "frkim", "pmfrk", "rrk", "dubeol", "dubeol_rev", "kana", "transparent"]
+ENGINE_MODES = ["pm", "frkim", "pmfrk", "rrk", "dubeol", "dubeol_rev", "kana", "grc", "he", "transparent"]
 HANJA_MODES = ["none", "shinjitai", "kyujitai", "simplified", "hanja"]
 
-_LINE_TAG_RE = re.compile(r"^%(pm|frk|mix|rrk|du|ed|jp|clean|uc|lc|tc)(?:\[(shin|kyu|sim|none|han)\])?")
-_TAG_MODE = {"pm": "pm", "frk": "frkim", "mix": "pmfrk", "rrk": "rrk", "du": "dubeol", "ed": "dubeol_rev", "jp": "kana", "clean": "transparent"}
+_LINE_TAG_RE = re.compile(r"^%(pm|frk|mix|rrk|du|ed|jp|grc|he|clean|uc|lc|tc)(?:\[(shin|kyu|sim|none|han)\])?")
+_TAG_MODE = {"pm": "pm", "frk": "frkim", "mix": "pmfrk", "rrk": "rrk", "du": "dubeol", "ed": "dubeol_rev", "jp": "kana", "grc": "grc", "he": "he", "clean": "transparent"}
 #: 대소문자 태그 — `%uc` 대문자, `%lc` 소문자, `%tc` 낱말마다 첫 글자만 대문자(나머지는 그대로).
 #: 변환 방식은 언제나 `clean`(transparent)이다: LaTeX 입력 확장만 하고, 그 결과에 대소문자를 적용한다.
 #: 태그를 쓰지 않는 한 켜지지 않으며 입력기 콤보에도 없다.
@@ -1456,7 +1585,7 @@ def convert_input(text, engine_mode="pm", hanja_mode="none", norm_mode="NFD"):
         if case:
             conv = apply_case(conv, case)
         conv = filter_kanji(conv, hanja_mode=hmode)
-        if mode != "kana":
+        if mode not in ("kana", "grc", "he"):       # 가나·그리스어는 한글 자모 정규화를 거치지 않는다
             conv = normalize_output(conv, norm_mode=norm_mode)
         out.append(conv)
     return "\n".join(out)
