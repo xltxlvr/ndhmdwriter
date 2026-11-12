@@ -13849,7 +13849,7 @@ class HelpDialog(QDialog):
         html = f"""
         <h2 style="margin-bottom:2px">ndhmdWriter</h2>
         <div style="color:#7a7368">버전 {__version__}</div>
-        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.20.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
+        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.21.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
         <p>
         지은이: {APP_AUTHOR}<br>
         라이선스: {APP_LICENSE}
