@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.7.3"
+__version__ = "0.7.4"
 
 from contextlib import contextmanager
 
@@ -8836,6 +8836,85 @@ def find_dead_references(win: "MainWindow"):
     return [(p, ln, pre, lab) for p, ln, pre, lab, dead in find_all_references(win) if dead]
 
 
+class ImageQuickLook(QDialog):
+    """그림 위에서 스페이스를 눌렀을 때 뜨는 큰 미리보기. 스페이스·Esc·Enter 로 닫고,
+    좌우(위아래) 화살표로 목록의 이웃 그림으로 넘어간다. 사진 원본을 화면에 맞춰 줄여 보여 준다."""
+
+    def __init__(self, panel: "ImageImportPanel"):
+        super().__init__(panel, Qt.Tool)
+        self._panel = panel
+        self.setWindowTitle("그림 크게 보기")
+        self.label = QLabel(alignment=Qt.AlignCenter)
+        self.label.setMinimumSize(200, 200)
+        self.caption = QLabel(alignment=Qt.AlignCenter)
+        self.caption.setStyleSheet("color: palette(mid); font-size: 11px;")
+        box = QVBoxLayout(self)
+        box.addWidget(self.label, 1)
+        box.addWidget(self.caption)
+        keys = QLabel("스페이스·Esc: 닫기 · ←→: 이웃 그림", alignment=Qt.AlignCenter)
+        keys.setStyleSheet("color: palette(mid); font-size: 11px;")
+        box.addWidget(keys)
+
+    def show_item(self, item):
+        scr = self.screen().availableGeometry() if self.screen() else QApplication.primaryScreen().availableGeometry()
+        maxw, maxh = int(scr.width() * 0.7), int(scr.height() * 0.7)
+        path = Path(item.data(Qt.UserRole + 1))
+        pix = self._load(path, maxw * 2, maxh * 2)
+        if pix.isNull():
+            self.label.setPixmap(QPixmap())
+            self.label.setText("미리보기를 만들 수 없습니다.")
+            info = ""
+        else:
+            info = f"{pix.width()} × {pix.height()} px"
+            self.label.setText("")
+            shown = pix.scaled(maxw, maxh, Qt.KeepAspectRatio, Qt.SmoothTransformation) \
+                if pix.width() > maxw or pix.height() > maxh else pix
+            self.label.setPixmap(shown)
+        rel = self._panel._win.workspace.relative(path) if self._panel._win.workspace else str(path)
+        self.caption.setText(f"{rel}  ·  {info}" if info else rel)
+        self.adjustSize()
+        self.setFocus()
+
+    @staticmethod
+    def _load(path: Path, w: int, h: int) -> QPixmap:
+        if path.suffix.lower() == ImageImportPanel.PDF_EXTENSION:
+            if have_qtpdf():
+                try:
+                    from PySide6.QtPdf import QPdfDocument
+                    doc = QPdfDocument()
+                    if doc.load(str(path)) == QPdfDocument.Error.None_ and doc.pageCount() > 0:
+                        ps = doc.pagePointSize(0)
+                        if ps.width() > 0 and ps.height() > 0:
+                            k = min(w / ps.width(), h / ps.height(), 3.0)
+                            img = doc.render(0, QSize(max(1, int(ps.width() * k)), max(1, int(ps.height() * k))))
+                            if not img.isNull():
+                                # PDF 의 투명 배경을 흰색 위에 얹는다(어두운 테마에서도 읽히게).
+                                out = QImage(img.size(), QImage.Format_RGB32)
+                                out.fill(Qt.white)
+                                pt = QPainter(out); pt.drawImage(0, 0, img); pt.end()
+                                return QPixmap.fromImage(out)
+                except Exception:
+                    pass
+            return QPixmap()
+        pix = QPixmap(str(path))
+        if pix.isNull() and path.suffix.lower() in (".gif", ".webp"):
+            pix = ImageImportPanel._pillow_first_frame(path)
+        return pix
+
+    def keyPressEvent(self, e):
+        k = e.key()
+        if k in (Qt.Key_Space, Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter):
+            self.close()
+        elif k in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down):
+            lst = self._panel.list
+            row = lst.currentRow() + (-1 if k in (Qt.Key_Left, Qt.Key_Up) else 1)
+            if 0 <= row < lst.count():
+                lst.setCurrentRow(row)
+                self.show_item(lst.item(row))
+        else:
+            super().keyPressEvent(e)
+
+
 class ImageImportPanel(QDialog):
     """그림 들여오기. 비모달 — 목록을 열어 둔 채 계속 커서를 옮겨 가며
     여러 장을 골라 넣을 수 있다.
@@ -8874,7 +8953,7 @@ class ImageImportPanel(QDialog):
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color: palette(mid); font-size: 11px;")
 
-        interaction_hint = QLabel("클릭 — 선택 · 더블클릭 — 삽입 · 우클릭 — 정보/열기/이름만 삽입")
+        interaction_hint = QLabel("클릭 — 선택 · 스페이스 — 크게 보기 · [본문 삽입] 또는 더블클릭 — 삽입 · 우클릭 — 정보/열기/이름만 삽입")
         interaction_hint.setWordWrap(True)
         interaction_hint.setStyleSheet("color: palette(mid); font-size: 11px;")
 
@@ -8883,10 +8962,13 @@ class ImageImportPanel(QDialog):
         self.list.setIconSize(QSize(self.THUMB_SIZE, self.THUMB_SIZE))
         self.list.setResizeMode(QListView.Adjust)
         self.list.setMovement(QListView.Static)
-        self.list.setSpacing(6)
+        self.list.setSpacing(10)
         self.list.setWordWrap(True)
         self.list.setUniformItemSizes(True)
         self.list.itemDoubleClicked.connect(self._on_double_click)
+        self.list.installEventFilter(self)
+        self.list.currentItemChanged.connect(lambda cur, _prev: self.insert_btn.setEnabled(cur is not None))
+        self._quicklook = None
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -8905,7 +8987,12 @@ class ImageImportPanel(QDialog):
         refresh_btn.clicked.connect(self.refresh)
         import_btn = QPushButton("가져오기…")
         import_btn.clicked.connect(self._import_external_image)
+        self.insert_btn = QPushButton("본문 삽입")
+        self.insert_btn.setEnabled(False)
+        self.insert_btn.setToolTip("고른 그림의 지시문을 원고의 커서 위치에 넣습니다 (더블클릭과 같음)")
+        self.insert_btn.clicked.connect(self._insert_current)
         btn_row = QHBoxLayout()
+        btn_row.addWidget(self.insert_btn)
         btn_row.addWidget(refresh_btn)
         btn_row.addWidget(import_btn)
 
@@ -8917,6 +9004,25 @@ class ImageImportPanel(QDialog):
         box.addLayout(btn_row)
 
         self.refresh()
+
+    def eventFilter(self, obj, ev):
+        if obj is self.list and ev.type() == QEvent.KeyPress and ev.key() == Qt.Key_Space \
+                and not ev.isAutoRepeat():
+            item = self.list.currentItem()
+            if item is not None:
+                if self._quicklook is None:
+                    self._quicklook = ImageQuickLook(self)
+                self._quicklook.show_item(item)
+                self._quicklook.show()
+                self._quicklook.raise_()
+                self._quicklook.activateWindow()
+            return True
+        return super().eventFilter(obj, ev)
+
+    def _insert_current(self):
+        item = self.list.currentItem()
+        if item is not None:
+            self._on_double_click(item)
 
     def _import_external_image(self):
         """작업공간 밖에 있는 그림(또는 PDF) 파일을 골라, 지금 훑고
@@ -23792,6 +23898,12 @@ _EN = {
     '\\bibitem {}개': '{0} \\bibitem entries',
     '.bib {}개 파일': '{0} .bib files',
     '그림 들여오기': 'Import images',
+    '본문 삽입': 'Insert into text',
+    '스페이스·Esc: 닫기 · ←→: 이웃 그림': 'Space/Esc: close · ←→: neighbouring image',
+    '그림 크게 보기': 'Large preview',
+    '미리보기를 만들 수 없습니다.': 'Cannot make a preview.',
+    '클릭 — 선택 · 스페이스 — 크게 보기 · [본문 삽입] 또는 더블클릭 — 삽입 · 우클릭 — 정보/열기/이름만 삽입': 'Click — select · Space — large preview · [Insert into text] or double-click — insert · right-click — info/open/insert name only',
+    '고른 그림의 지시문을 원고의 커서 위치에 넣습니다 (더블클릭과 같음)': 'Insert the directive for the selected image at the cursor (same as double-click)',
     '클릭 — 선택 · 더블클릭 — 삽입 · 우클릭 — 정보/열기/이름만 삽입': 'Click — select · Double-click — insert · Right-click — info/open/insert name only',
     'figure로 삽입': 'Insert as figure',
     '예: .6\\linewidth, 5cm': 'e.g. .6\\linewidth, 5cm',
