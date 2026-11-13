@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.7.2"
+__version__ = "0.7.3"
 
 from contextlib import contextmanager
 
@@ -7217,7 +7217,7 @@ class HanjaPopup(QFrame):
 
 
 # ===========================================================================
-# 9-m. 한중일 입력기 (pmIME 코어)
+# 9-m. 다국어 입력기 (pmIME 코어)
 # ===========================================================================
 
 _PMIME_MODULE = None          # 한 번 찾아 둔다: 모듈 또는 False(없음)
@@ -7274,7 +7274,7 @@ class PmImePanel(QDialog):
         self._win = window
         self._core = load_pmime_core()
         self._last_input = ""
-        self.setWindowTitle("한중일 pm 입력기")
+        self.setWindowTitle("pm 다국어 입력기")
 
         s = window._settings
         self.engine = QComboBox()
@@ -7460,7 +7460,7 @@ class PmImePanel(QDialog):
 
 class PmKanjiDialog(QDialog):
     """일본어 사용자 한자 사전(customkanji.json) — 찾아서 입력기에 넣고, 등록·수정·삭제한다.
-    사전의 키는 `{h:ai}` 꼴이고, 한중일 pm 입력기의 `かな`(%jp) 엔진에서 한자로 바뀐다
+    사전의 키는 `{h:ai}` 꼴이고, pm 다국어 입력기의 `かな`(%jp) 엔진에서 한자로 바뀐다
     (예: `%jp {h:ai} no kimochi` → 愛のきもち). 항목을 고르면 그 **키**가 입력기 입력칸에 들어간다.
     저장 위치·반영은 pmime_core 가 맡는다(저장 즉시 변환기에도 반영)."""
 
@@ -13849,7 +13849,7 @@ class HelpDialog(QDialog):
         html = f"""
         <h2 style="margin-bottom:2px">ndhmdWriter</h2>
         <div style="color:#7a7368">버전 {__version__}</div>
-        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.21.1, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
+        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.21.3, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
         <p>
         지은이: {APP_AUTHOR}<br>
         라이선스: {APP_LICENSE}
@@ -17051,7 +17051,7 @@ class MainWindow(QMainWindow):
             _sc = QShortcut(QKeySequence(("Meta+" if sys.platform == "darwin" else "Alt+") + _k), self)
             _sc.activated.connect(lambda k=_k: self.insert_slot(k, from_shortcut=True))
             self._slot_shortcuts.append(_sc)
-        act(m, "한중일 pm 입력기…", "Ctrl+Alt+H", self.open_pmime_panel)
+        act(m, "pm 다국어 입력기…", "Ctrl+Alt+H", self.open_pmime_panel)
         act(m, "선택을 pm 변환 (현재 설정으로 바로)", "Ctrl+Shift+H", self.convert_selection_pmime)
         self._act_hanja = act(m, "한자 변환(&K)", "F9", self.convert_hanja)
         self._act_hanja.setShortcuts([QKeySequence("F9"), QKeySequence("Ctrl+\\")])
@@ -21824,7 +21824,7 @@ class MainWindow(QMainWindow):
         return self._pm_word_cursor(cursor if isinstance(cursor, QTextCursor) else cur, engine)
 
     def send_selection_to_pmime(self, cursor: QTextCursor | None = None):
-        """선택(없으면 커서 위 단어)을 한중일 pm 입력기의 입력칸으로 보내고 그리로 포커스를 준다. 입력기에서
+        """선택(없으면 커서 위 단어)을 pm 다국어 입력기의 입력칸으로 보내고 그리로 포커스를 준다. 입력기에서
         Enter 를 한 번 치면 변환 결과가 (그대로 남아 있는) 선택 영역을 대체한다."""
         target = self._pm_target(cursor)
         if target is None:
@@ -21837,7 +21837,7 @@ class MainWindow(QMainWindow):
         self._pmime_panel.input.moveCursor(QTextCursor.End)
 
     def convert_selection_pmime(self, cursor: QTextCursor | None = None):
-        """선택(없으면 커서 위 단어)을 한중일 pm 입력기의 지금 설정(엔진·한자 필터·NFC·LaTeX 확장)으로
+        """선택(없으면 커서 위 단어)을 pm 다국어 입력기의 지금 설정(엔진·한자 필터·NFC·LaTeX 확장)으로
         바로 변환해 그 자리에 되넣는다(실행 취소 한 번, 입력기 창은 열지 않는다)."""
         target = self._pm_target(cursor)
         if target is None:
@@ -23726,7 +23726,7 @@ _EN = {
     '변환 없음 (%clean)': 'No conversion (%clean)',
     '한자 필터 없음': 'No hanja filter',
     '한자 (han)': 'Hanja (han)',
-    '한중일 pm 입력기': 'CJK pm input',
+    'pm 다국어 입력기': 'pm multilingual input',
     '끄면 NFD(첫가끝 자모)로 내보냅니다. 옛한글을 조합해 쓸 때만 끄세요.\nNFD 글자는 문단 재배열 너비·글자 수 계산에서 3글자로 셉니다.': 'When off, output is NFD (conjoining jamo). Turn off only when composing Old Hangul.\nNFD characters count as 3 characters in paragraph reflow width and character counts.',
     'LaTeX 확장': 'LaTeX expansion',
     "\\'e → é, \\x{AC00} → 가 같은 LaTeX 표기를 실제 문자로 바꿉니다.": "Converts LaTeX notation such as \\'e → é and \\x{AC00} → 가 into real characters.",
@@ -24011,7 +24011,7 @@ _EN = {
     'AI 도우미 설정(실험)…': 'AI assistant settings (experimental)…',
     '카드 보기(시놉시스)(&V)…': 'Card view (synopsis)(&V)…',
     '모든 카드 보기(작업공간 전체)…': 'All cards view (whole workspace)…',
-    '한중일 pm 입력기…': 'CJK pm input…',
+    'pm 다국어 입력기…': 'pm multilingual input…',
     '선택을 pm 변환 (현재 설정으로 바로)': 'Convert selection with pm (current settings)',
     '한자 변환(&K)': 'Hanja conversion(&K)',
     '그림 들여오기(&I)…': 'Import images(&I)…',

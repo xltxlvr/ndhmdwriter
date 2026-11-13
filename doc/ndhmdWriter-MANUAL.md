@@ -1,6 +1,6 @@
 ---
 title: ndhmdWriter 사용자 설명서 (참조편) — 초고
-author: ndhmdWriter 0.7.2 기준
+author: ndhmdWriter 0.7.3 기준
 toplevel: chapter
 setup: [articlelike.nmd,defaultnoto.nmd]
 classoption+: chapter
@@ -29,7 +29,7 @@ compileoption: --missingchar
 
 # 이 설명서에 대하여 {#ch:about}
 
-이 설명서는 ***ndhmdWriter*** 버전 0.7.2의 **참조편**이다. 처음 쓰는 사람을 안내하는 글이 아니라, 앱이 가진 기능을 메뉴 순서와 화면 구성에 맞추어 빠짐없이 적은 사전이다. "왜 이렇게 만들었는가"는 별도의 안내문(*무엇을 위해 만들었는가*)이 다루고, 이 글은 "무엇이 어떻게 동작하는가"만 적는다.
+이 설명서는 ***ndhmdWriter*** 버전 0.7.3의 **참조편**이다. 처음 쓰는 사람을 안내하는 글이 아니라, 앱이 가진 기능을 메뉴 순서와 화면 구성에 맞추어 빠짐없이 적은 사전이다. "왜 이렇게 만들었는가"는 별도의 안내문(*무엇을 위해 만들었는가*)이 다루고, 이 글은 "무엇이 어떻게 동작하는가"만 적는다.
 
 ## 표기 약속 {#sec:notation}
 
@@ -892,9 +892,9 @@ Qt 표준 항목(실행 취소·다시 실행·잘라내기·복사·붙여넣�
 
 # 도구 {#ch:tools}
 
-## 한중일 pm 입력기 {#sec:pmime}
+## pm 다국어 입력기 {#sec:pmime}
 
-로마자로 한글(옛한글 포함)·가나·한자를 입력하는 보조 입력기이다(0.4.121). 변환은 별도 프로그램 **pmIME**의 변환 코어(`pmime_core.py`)가 하고, 앱은 그 위에 입력창을 얹는다. **[도구 ▶ 한중일 pm 입력기…]** `Ctrl+Alt+H`.
+로마자로 한글(옛한글 포함)·가나·한자를 입력하는 보조 입력기이다(0.4.121). 변환은 별도 프로그램 **pmIME**의 변환 코어(`pmime_core.py`)가 하고, 앱은 그 위에 입력창을 얹는다. **[도구 ▶ pm 다국어 입력기…]** `Ctrl+Alt+H`.
 
 - **선택 기능이다.** `pmime_core.py`가 `ndhmdWriter.py`와 같은 폴더(또는 실행 파일 폴더, `~/.config/pmimegui`)에 있을 때만 쓸 수 있다. 없으면 창은 열리지만 입력칸이 비활성이고 안내가 나온다. 사전(`shinjitai.json` `kyujitai.json` `simplified.json` `customkanji.json`)도 코어 곁에 둔다.
 - **쓰는 법.** 위 칸에 로마자로 쓰면 아래 칸에 바로 변환된다. `Enter` = **편집창 커서 위치에 삽입**(선택이 있으면 그것을 대체, 한 번의 실행 취소), `Shift+Enter` = 줄바꿈, `Esc` = **창 닫기**(다른 도구 창과 같다. 입력을 비우는 것은 `비우기` 버튼), `Alt+Z` = 방금 삽입한 입력 되살리기. `삽입 후 비우기`가 켜져 있으면(기본) 삽입한 뒤 **포커스가 편집창으로 돌아가** 글을 이어 쓸 수 있고(0.4.125), 꺼져 있으면 입력창에 남아 이어서 칠 수 있다. `복사` 버튼은 결과를 클립보드로 보낸다.
@@ -1700,7 +1700,7 @@ ndhmdWriter --goto 줄 파일경로
   메모 & \texttt{Ctrl+\allowbreak{}Alt+\allowbreak{}M} \\
   약어 슬롯 편집 & \texttt{Ctrl+\allowbreak{}Alt+\allowbreak{}Y} \\
   약어 슬롯 입력 & \texttt{Alt+\allowbreak{}1}\textasciitilde{}\texttt{0} (맥: \texttt{Control+\allowbreak{}1}\textasciitilde{}\texttt{0}) \\
-  한중일 pm 입력기 & \texttt{Ctrl+\allowbreak{}Alt+\allowbreak{}H} \\
+  pm 다국어 입력기 & \texttt{Ctrl+\allowbreak{}Alt+\allowbreak{}H} \\
   선택을 pm 변환(현재 설정으로 바로) & \texttt{Ctrl+\allowbreak{}Shift+\allowbreak{}H} \\
   그림 들여오기 & \texttt{Ctrl+\allowbreak{}Alt+\allowbreak{}I} \\
   간단 표 편집기 & \texttt{Ctrl+\allowbreak{}Shift+\allowbreak{}E} \\
