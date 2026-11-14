@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.9.5"
+__version__ = "0.9.6"
 
 from contextlib import contextmanager
 
@@ -16735,16 +16735,75 @@ def ext_tool_resolve(command: str, extra_dirs: str = ""):
         parts = [x[1:-1] if len(x) >= 2 and x[0] == x[-1] and x[0] in "\"'" else x for x in parts]
     if not parts:
         raise ValueError("명령이 비어 있습니다.")
+    dirs = ext_tool_search_dirs(extra_dirs)
+    search = os.pathsep.join(dirs)
     prog = parts[0]
+    pre: list = []                                   # 인터프리터에 붙일 앞 인자(`py -3` 등)
+
+    # 스크립트 하나만 적은 경우(`what.py`, `~/bin/fix.lua`): 확장자로 인터프리터를 고른다.
+    if prog.lower().endswith(tuple(_EXT_SCRIPT_INTERP)):
+        script = _ext_find_script(prog, dirs)
+        if script is None:
+            raise ValueError(f"스크립트를 찾지 못했습니다: {prog} — '추가 검색 폴더'에 두거나 전체 경로로 적으세요.")
+        interp = _EXT_SCRIPT_INTERP[os.path.splitext(prog)[1].lower()]
+        parts = [interp, script, *parts[1:]]
+        prog = interp
+
     if os.sep in prog or (os.altsep and os.altsep in prog):
         exe = os.path.expanduser(prog)
         if not os.path.isfile(exe):
             raise ValueError(f"실행 파일이 없습니다: {prog}")
     else:
-        exe = shutil.which(prog, path=os.pathsep.join(ext_tool_search_dirs(extra_dirs)))
+        exe = shutil.which(prog, path=search)
+        if not exe and prog.lower() in _EXT_PYTHON_NAMES:
+            # python3 ⇄ python ⇄ py: Windows 에는 python3 가 없고 맥·리눅스에는 python 이 없는 일이 흔하다.
+            for alt in _EXT_PYTHON_NAMES:
+                if alt != prog.lower() and (exe := shutil.which(alt, path=search)):
+                    pre = ["-3"] if alt == "py" else []
+                    break
         if not exe:
             raise ValueError(f"{prog} 을(를) 찾지 못했습니다. PATH 나 '추가 검색 폴더'에 두세요.")
-    return exe, parts[1:]
+
+    args = pre + parts[1:]
+    # 인터프리터 뒤의 스크립트 인자(`python3 what.py`)가 현재 폴더에 없으면 검색 폴더에서 찾아 전체 경로로 바꾼다.
+    base = os.path.splitext(os.path.basename(prog))[0].lower()
+    if base.startswith(_EXT_INTERP_PREFIXES) or base in _EXT_INTERP_NAMES:
+        for i, a in enumerate(args):
+            if a in ("-m", "-c", "-e"):
+                break                                    # 모듈·한 줄 실행은 스크립트 인자가 아니다
+            if a.startswith("-") or "{" in a:
+                continue
+            found = _ext_find_script(a, dirs)
+            if found is not None:
+                args[i] = found
+            elif os.path.splitext(a)[1].lower() in _EXT_SCRIPT_INTERP:
+                raise ValueError(f"스크립트를 찾지 못했습니다: {a} — '추가 검색 폴더'에 두거나 전체 경로로 적으세요.")
+            break                                        # 첫 비옵션 인자만 스크립트로 본다
+    return exe, args
+
+
+#: 확장자 → 그 스크립트를 돌리는 인터프리터(스크립트만 적었을 때)
+_EXT_SCRIPT_INTERP = {".py": "python3", ".pyw": "python3", ".lua": "texlua"}
+_EXT_PYTHON_NAMES = ("python3", "python", "py")
+_EXT_INTERP_PREFIXES = ("python", "texlua", "luatex", "lualatex")
+_EXT_INTERP_NAMES = {"py", "lua", "luajit", "perl", "ruby", "node", "bash", "sh", "zsh"}
+
+
+def _ext_find_script(name: str, dirs: list):
+    """스크립트 파일의 전체 경로. 절대 경로·현재 폴더에 있으면 그것, 아니면 검색 폴더에서 찾는다.
+    없으면 None."""
+    path = os.path.expanduser(name)
+    if os.path.isabs(path):
+        return path if os.path.isfile(path) else None
+    if os.path.isfile(path):
+        return os.path.abspath(path)
+    if os.sep in name or (os.altsep and os.altsep in name):
+        return None                                      # 하위 경로는 검색 폴더 기준으로도 찾아 본다
+    for d in dirs:
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand):
+            return cand
+    return None
 
 
 def ext_tool_build(command: str, text: str, extra_dirs: str = ""):
@@ -16915,8 +16974,9 @@ class ExtToolConfirmDialog(QDialog):
     def _check(self):
         ok = True
         try:
-            exe, _ = ext_tool_resolve(self.command(), self._win.ext_tool_dirs())
-            self.note.setText(f"실행 파일: {exe}")
+            exe, rargs = ext_tool_resolve(self.command(), self._win.ext_tool_dirs())
+            script = next((x for x in rargs if os.path.isabs(x) and os.path.isfile(x)), "")
+            self.note.setText(f"실행 파일: {exe}" + (f"  ·  스크립트: {script}" if script else ""))
         except ValueError as e:
             ok = False
             self.note.setText(f'<span style="color:#c0392b">{_html.escape(_i18n_translate(str(e)))}</span>')
@@ -16925,7 +16985,7 @@ class ExtToolConfirmDialog(QDialog):
 
     def _show_help(self):
         try:
-            exe, _ = ext_tool_resolve(self.command(), self._win.ext_tool_dirs())
+            exe, rargs = ext_tool_resolve(self.command(), self._win.ext_tool_dirs())
         except ValueError:
             return
         self.help.setVisible(True)
@@ -16934,9 +16994,9 @@ class ExtToolConfirmDialog(QDialog):
         self.btn_help.setEnabled(False)
         self._runner = AiRunner(self)
         self._runner.done.connect(self._help_done)
-        prog, args = exe, ["--help"]
+        prog, args = exe, [*rargs, "--help"]
         if sys.platform == "win32" and exe.lower().endswith((".cmd", ".bat")):
-            prog, args = "cmd.exe", ["/c", exe, "--help"]
+            prog, args = "cmd.exe", ["/c", exe, *rargs, "--help"]
         self._runner.start(prog, args, None, os.path.dirname(exe), 30)
 
     def _help_done(self, ok, out, err):
