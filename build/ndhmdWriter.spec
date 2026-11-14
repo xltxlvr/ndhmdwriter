@@ -10,7 +10,7 @@
 # 결과: dist\ndhmdWriter.exe (ONEFILE = True) 또는 dist\ndhmdWriter\ndhmdWriter.exe (False)
 #
 # 같은 폴더에 있어야 하는 파일
-#   ndhmdWriter.py, pmime_core.py, hanja_core.py, hanja.txt, mssymbol.txt                      (필수 — 한중일 pm 입력기의 변환 코어)
+#   ndhmdWriter.py, pmime_core.py, hanja_core.py, hanja.txt                      (필수 — pm 다국어 입력기의 변환 코어)
 #   shinjitai.json kyujitai.json simplified.json customkanji.json   (pm 입력기 사전)
 #   ndhmdwriter_icon.png, ndhmdwriter_icon.ico         (아이콘; 없으면 아이콘 없이 빌드)
 #
@@ -21,7 +21,7 @@ import os
 
 # True  = 파일 하나짜리 exe (배포는 편하지만 시작이 느리고, 백신이 의심하는 일이 더 잦다)
 # False = 폴더로 배포 (시작이 빠르고 오탐이 적다 — 백신 문제가 있으면 이쪽을 권한다)
-ONEFILE = True
+ONEFILE = False
 
 HERE = os.path.abspath(SPECPATH)
 
@@ -34,7 +34,7 @@ def have(name):
 datas = []
 for name in ("ndhmdwriter_icon.png",
              "shinjitai.json", "kyujitai.json", "simplified.json", "customkanji.json",
-             "hanja.txt", "mssymbol.txt"):   # 한자 변환(F9) 사전 원본 — libhangul, BSD 라이선스. 머리말의 저작권 표시를 지우지 말 것
+             "hanja.txt"):   # 한자 변환(F9) 사전 원본 — libhangul, BSD 라이선스. 머리말의 저작권 표시를 지우지 말 것
     if have(name):
         datas.append((os.path.join(HERE, name), "."))
 
@@ -42,9 +42,10 @@ for name in ("ndhmdwriter_icon.png",
 hiddenimports = [
     "hanja_core",      # 한자 변환(F9) 코어 — 사전 DB 를 만들고 후보를 찾는다 (Qt 없음)
     "sqlite3",
-    "pmime_core",      # 한중일 pm 입력기 변환 코어 (ndhmdWriter 가 try-import 한다)
+    "pmime_core",      # pm 다국어 입력기 변환 코어 (ndhmdWriter 가 try-import 한다)
     "unicodedata",     # pmime_core 가 쓴다
     "yaml",            # PyYAML — front matter 읽기 (함수 안에서 import)
+    "PySide6.QtPdf",   # PDF 그림 미리보기·조각 그림 자르기 — 함수 안에서 늦게 import 하므로 분석이 놓친다
 ]
 try:
     import PIL  # noqa: F401
@@ -52,13 +53,13 @@ try:
 except ImportError:
     pass
 
-# 쓰지 않는 큰 Qt 모듈은 빼서 크기를 줄인다. (Svg, Network, Widgets, Gui, Core 는 남겨 둔다)
+# 쓰지 않는 큰 Qt 모듈은 빼서 크기를 줄인다. (Svg, Network, Widgets, Gui, Core, Pdf 는 남겨 둔다)
 excludes = [
     "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineQuick",
     "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuick3D", "PySide6.QtQuickWidgets",
     "PySide6.Qt3DCore", "PySide6.Qt3DRender", "PySide6.QtCharts", "PySide6.QtDataVisualization",
     "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets", "PySide6.QtBluetooth",
-    "PySide6.QtSensors", "PySide6.QtSerialPort", "PySide6.QtPdf", "PySide6.QtPdfWidgets",
+    "PySide6.QtSensors", "PySide6.QtSerialPort", "PySide6.QtPdfWidgets",   # QtPdf 는 빼면 안 된다(PDF 그림 미리보기)
     "PySide6.QtDesigner", "PySide6.QtHelp", "PySide6.QtTest", "PySide6.QtSql",
     "tkinter",
 ]

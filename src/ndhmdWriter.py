@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.9.4"
+__version__ = "0.9.5"
 
 from contextlib import contextmanager
 
@@ -8399,6 +8399,35 @@ def pillow_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def render_pdf_page_png(pdf: Path, dst: Path, page: int = 0, max_side: int = 2200):
+    """QtPdf 로 PDF 한 쪽을 흰 바탕의 PNG 로 굽는다(poppler 가 없는 Windows 에서도 되도록).
+    (성공?, 실패했을 때의 이유). 긴 변이 max_side 픽셀 안팎이 되게 키운다(작은 그림은 최대 4배)."""
+    try:
+        from PySide6.QtPdf import QPdfDocument
+    except ImportError as e:
+        return False, f"QtPdf 를 불러오지 못했습니다 ({e})"
+    doc = QPdfDocument()
+    err = doc.load(str(pdf))
+    if err != QPdfDocument.Error.None_:
+        return False, f"QtPdf 가 PDF 를 열지 못했습니다 ({err.name})"
+    if doc.pageCount() <= page:
+        return False, "쪽이 없습니다"
+    ps = doc.pagePointSize(page)
+    if ps.width() <= 0 or ps.height() <= 0:
+        return False, "쪽 크기를 알 수 없습니다"
+    k = min(4.0, max_side / max(ps.width(), ps.height()))
+    img = doc.render(page, QSize(max(1, int(ps.width() * k)), max(1, int(ps.height() * k))))
+    if img.isNull():
+        return False, "QtPdf 가 그리지 못했습니다"
+    out = QImage(img.size(), QImage.Format_RGB32)
+    out.fill(Qt.white)                      # 투명 바탕은 흰색 위에 얹는다
+    pt = QPainter(out)
+    pt.drawImage(0, 0, img)
+    pt.end()
+    doc.close()
+    return (True, "") if out.save(str(dst), "PNG") else (False, "PNG 로 저장하지 못했습니다")
 
 
 def have_qtpdf() -> bool:
@@ -19502,18 +19531,34 @@ class MainWindow(QMainWindow):
             return
         out = self._render_dir / hashlib.sha1(str(path).encode()).hexdigest()[:16]
         out.mkdir(parents=True, exist_ok=True)
-        dst = out / "img.svg"
-        try:
-            rc = subprocess.run(["pdftocairo", "-svg", str(path), str(dst)],
-                                capture_output=True, timeout=20,
-                                creationflags=_NO_WINDOW).returncode
-        except (OSError, subprocess.SubprocessError):
-            rc = 1
-        if rc == 0 and dst.exists():
-            self._render_cache[key] = str(dst)
-            self.preview.set_image(str(dst), f"{head}   ({path.name})")
+        why = []
+        # 1) poppler 의 pdftocairo — 벡터(SVG)라 확대해도 선명하다. TeX Live macOS·리눅스에는 흔하지만
+        #    Windows 에는 보통 없다.
+        if shutil.which("pdftocairo") is not None:
+            dst = out / "img.svg"
+            try:
+                rc = subprocess.run(["pdftocairo", "-svg", str(path), str(dst)],
+                                    capture_output=True, timeout=20,
+                                    creationflags=_NO_WINDOW).returncode
+            except (OSError, subprocess.SubprocessError):
+                rc = 1
+            if rc == 0 and dst.exists():
+                self._render_cache[key] = str(dst)
+                self.preview.set_image(str(dst), f"{head}   ({path.name})")
+                return
+            why.append("pdftocairo 가 변환하지 못했습니다")
         else:
-            self.preview.set_message(head, f"{path.name} 을(를) 그리지 못했습니다.")
+            why.append("pdftocairo(poppler)가 PATH 에 없습니다")
+        # 2) QtPdf 로 래스터(PDF 만 — EPS/PS 는 못 연다). 앱에 들어 있어 따로 설치할 것이 없다.
+        if path.suffix.lower() == ".pdf":
+            dst = out / "img.png"
+            ok, reason = render_pdf_page_png(path, dst)
+            if ok:
+                self._render_cache[key] = str(dst)
+                self.preview.set_image(str(dst), f"{head}   ({path.name})")
+                return
+            why.append(reason)
+        self.preview.set_message(head, f"{path.name} 을(를) 그리지 못했습니다.\n" + "\n".join(why))
 
     # -- 수식 -------------------------------------------------------------------
 

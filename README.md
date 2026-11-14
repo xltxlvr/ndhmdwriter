@@ -137,10 +137,7 @@ ndhmdSuite is an all-in-one installer designed to set up the ndhmd environment o
 
 Please refer to the following links:
 
-- Intro (in Korean): https://nonametex.imweb.me/intro/?bmode=view&idx=174387790
-- Download: https://drive.google.com/file/d/1sEWJ3L15oYN1hjQyb1cUia1nzbuv5Cuu/view?usp=sharing
-
-
+- homepage: https://xltxlvr.github.io/ndhmdsuite
 
 # License
 

@@ -3,6 +3,11 @@
 버전은 `__version__` 하나로 관리한다(파일 맨 위). 수정이 있을 때마다
 마지막 자리(patch)를 하나씩 올린다. 최신 항목이 위에 온다.
 
+## 0.9.5
+
+- **PDF 그림 미리보기가 poppler 없이도 되도록.** 미리보기 패널은 PDF/EPS/PS 그림을 `pdftocairo -svg`로만 변환했다. Windows에는 `pdftocairo`가 보통 없어서(스크립트 직접 실행도, PyInstaller 빌드도) 미리보기가 "그리지 못했습니다"로 끝났고, 있는 macOS에서만 됐다. 이제 `pdftocairo`가 없거나 실패하면 PDF는 QtPdf로 첫 쪽을 흰 바탕 PNG로 그려 보여 준다. 그래도 안 되면 실패 이유(`pdftocairo(poppler)가 PATH 에 없습니다`, QtPdf 쪽 이유)를 함께 보인다.
+  - 확인(리눅스, 오프스크린): `pdftocairo`가 있을 때는 SVG, 없다고 가장하면 QtPdf PNG(한 쪽/여러 쪽), EPS는 이유와 함께 실패 문구, QtPdf import 실패 시 두 이유가 함께 나옴. 못 한 것: 실제 Windows·PyInstaller 빌드.
+
 ## 0.9.4
 
 - **LilyPond: tagline 자동 제거.** 컴파일할 때만 소스에 `\header { tagline = "" }`를 끼운다(`\version` 줄 뒤, 없으면 맨 앞; 소스에 `tagline`이 있으면 그대로). 저장하는 `.ly`는 그대로다. 종류 JSON에 `inject` 키(`text`·`unless`·`after`)를 더해 다른 종류에도 쓸 수 있다.
