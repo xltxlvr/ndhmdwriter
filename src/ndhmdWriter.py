@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.7.4"
+__version__ = "0.9.4"
 
 from contextlib import contextmanager
 
@@ -3061,6 +3061,7 @@ class Workspace:
     #: 빌드 산출물과 숨김 폴더는 목록에서 뺀다.
     SKIP_DIRS = {".git", ".svn", "__pycache__", "_build", ".ndhmd",
                  "_images",   # ndhmd4tex 이 원격 그림을 캐싱해 두는 자리
+                 "_external", # ndhmd4tex 의 ```external 블록 결과(그림·글)와 그 소스를 두는 자리
                  "_assets",   # 컴파일에 관여하지 않는 참고자료 창고
                  "_export"}   # [파일] ▸ 내보내기 의 기본 목적지
     #: 자료 창고 — 원고도 부속 파일도 아니다. 컴파일·BookIndex·
@@ -6385,6 +6386,18 @@ class Prefs:
         """`ndhmd PATH` — 도구를 찾을 때 PATH 앞에 임시로 얹을 폴더들(한 줄에 하나)."""
         return self.s.value("prefs/extra_path", "", type=str)
 
+    def external_always(self) -> bool:
+        """```external 블록의 외부 도구 실행(--external)을 묻지 않고 늘 허용할지. 기본은 끔."""
+        return self.s.value("prefs/external_always", False, type=bool)
+
+    def jigsaw_kind(self) -> str:
+        """조각 그림 도구에서 마지막으로 고른 종류."""
+        return self.s.value("prefs/jigsaw_kind", "latex", type=str)
+
+    def jigsaw_kinds_json(self) -> str:
+        """사용자가 더하거나 덮어쓴 조각 그림 종류(JSON)."""
+        return self.s.value("prefs/jigsaw_kinds", "", type=str)
+
     def jigsaw_png(self) -> bool:
         """조각 그림을 저장할 때 HTML 용 PNG 를 PDF 옆에 함께 만들지."""
         return self.s.value("prefs/jigsaw_png", True, type=bool)
@@ -6878,6 +6891,28 @@ class PreferencesDialog(QDialog):
             "저장하면 곧바로 적용된다. 존재하지 않는 폴더는 무시한다.")
         form.addRow("ndhmd PATH", self.extra_path)
 
+        self.external_always = QCheckBox("```external 블록의 외부 도구 실행을 묻지 않고 항상 허용 (--external)")
+        self.external_always.setChecked(self.prefs.external_always())
+        self.external_always.setToolTip(
+            "원고에 ```external 블록이 있고 결과가 _external/ 에 아직 없으면 ndhmd4tex·ndhmd2html 이 mapping 에\n"
+            "등록된 외부 도구를 실행해야 합니다. 기본은 실행 전에 한 번 묻습니다(결과가 이미 있으면 묻지 않습니다).\n"
+            "남의 원고를 열 때도 명령이 돌 수 있으므로, 내 원고만 다룰 때에만 켜세요.")
+        form.addRow("외부 도구 블록", self.external_always)
+
+        self.jig_kinds = QPlainTextEdit(self.prefs.jigsaw_kinds_json())
+        self.jig_kinds.setFixedHeight(96)
+        self.jig_kinds.setTabChangesFocus(True)
+        self.jig_kinds.setPlaceholderText(
+            '[{"id": "asy", "ext": ".asy", "comment": "//",\n'
+            '  "steps": [["asy", "-f", "pdf", "-noV", "{src}"]],\n'
+            '  "outputs": ["{stem}.pdf"], "crop": "none"}]')
+        self.jig_kinds.setToolTip(
+            "조각 그림 도구의 종류를 더하거나 바꾼다(JSON 목록). 같은 id(plain, asy, lilypond, musixtex,\n"
+            "pmx, mtx, mpost)는 적은 키만 덮어쓴다. 키: label, ext, comment, engines, steps(명령 목록),\n"
+            "outputs, crop(ink|none), template, timeout. 명령에는 {src} {stem} {engine}\n"
+            "{inc:-I}(검색 폴더마다 -I 폴더) {glob:패턴} 을 쓸 수 있다. 저장하면 새로 여는 조각 그림 창부터 적용된다.")
+        form.addRow("조각 그림 종류", self.jig_kinds)
+
         self.animation = QCheckBox("애니메이션 gif/webp 를 움직이게 넣기 (--animation)")
         self.animation.setChecked(self.prefs.animation())
         self.animation.setToolTip(
@@ -7011,7 +7046,10 @@ class PreferencesDialog(QDialog):
             hanja_parenthesize=self.hanja_paren.isChecked(),
             hanja_hangul_first=self.hanja_hg.isChecked(),
             extra_path=self.extra_path.toPlainText().strip(),
+            jigsaw_kinds=self.jig_kinds.toPlainText().strip(),
+            external_always=self.external_always.isChecked(),
         )
+        JigsawFigure.use_kinds(jigsaw_kinds(self.jig_kinds.toPlainText()))
         apply_extra_path(self.extra_path.toPlainText())
         self._win.apply_preferences()
         super().accept()
@@ -8224,6 +8262,7 @@ class AccentPanel(QDialog):
 # 미리 보느라 받아둔 그림을 컴파일이 다시 받지 않고, 반대의 경우도 같다.
 
 IMAGE_CACHE_DIR = "_images"
+EXTERNAL_CACHE_DIR = "_external"      # ndhmd4tex ```external 블록의 결과 폴더(같은 이름)
 URL_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
 
 _TEX_READY_EXT = {".pdf", ".png", ".jpg", ".jpeg", ".eps", ".ps", ".bmp", ".mps"}
@@ -8836,6 +8875,16 @@ def find_dead_references(win: "MainWindow"):
     return [(p, ln, pre, lab) for p, ln, pre, lab, dead in find_all_references(win) if dead]
 
 
+def dim_label_css(widget, size_px: int = 11) -> str:
+    """보조 안내 글씨용 스타일. 테마와 상관없이 읽히도록 글자색과 바탕색을 섞어 만든다
+    (`palette(mid)` 는 다크 모드에서 바탕과 거의 같은 색이 되어 안 보인다)."""
+    pal = widget.palette()
+    fg, bg = pal.color(QPalette.WindowText), pal.color(QPalette.Window)
+    mix = lambda a, b: int(a * 0.7 + b * 0.3)
+    c = QColor(mix(fg.red(), bg.red()), mix(fg.green(), bg.green()), mix(fg.blue(), bg.blue()))
+    return f"color: {c.name()}; font-size: {size_px}px;"
+
+
 class ImageQuickLook(QDialog):
     """그림 위에서 스페이스를 눌렀을 때 뜨는 큰 미리보기. 스페이스·Esc·Enter 로 닫고,
     좌우(위아래) 화살표로 목록의 이웃 그림으로 넘어간다. 사진 원본을 화면에 맞춰 줄여 보여 준다."""
@@ -8847,13 +8896,22 @@ class ImageQuickLook(QDialog):
         self.label = QLabel(alignment=Qt.AlignCenter)
         self.label.setMinimumSize(200, 200)
         self.caption = QLabel(alignment=Qt.AlignCenter)
-        self.caption.setStyleSheet("color: palette(mid); font-size: 11px;")
         box = QVBoxLayout(self)
         box.addWidget(self.label, 1)
         box.addWidget(self.caption)
         keys = QLabel("스페이스·Esc: 닫기 · ←→: 이웃 그림", alignment=Qt.AlignCenter)
-        keys.setStyleSheet("color: palette(mid); font-size: 11px;")
         box.addWidget(keys)
+        self._dim = [self.caption, keys]
+        self._restyle()
+
+    def _restyle(self):
+        for lb in self._dim:
+            lb.setStyleSheet(dim_label_css(self))
+
+    def changeEvent(self, e):
+        if e.type() == QEvent.PaletteChange and hasattr(self, "_dim"):
+            self._restyle()
+        super().changeEvent(e)
 
     def show_item(self, item):
         scr = self.screen().availableGeometry() if self.screen() else QApplication.primaryScreen().availableGeometry()
@@ -8951,11 +9009,10 @@ class ImageImportPanel(QDialog):
 
         self.hint = QLabel()
         self.hint.setWordWrap(True)
-        self.hint.setStyleSheet("color: palette(mid); font-size: 11px;")
 
         interaction_hint = QLabel("클릭 — 선택 · 스페이스 — 크게 보기 · [본문 삽입] 또는 더블클릭 — 삽입 · 우클릭 — 정보/열기/이름만 삽입")
         interaction_hint.setWordWrap(True)
-        interaction_hint.setStyleSheet("color: palette(mid); font-size: 11px;")
+        self._dim = [self.hint, interaction_hint]
 
         self.list = QListWidget()
         self.list.setViewMode(QListView.IconMode)
@@ -8983,6 +9040,12 @@ class ImageImportPanel(QDialog):
         opt_row.addWidget(QLabel("width="))
         opt_row.addWidget(self.width_edit, 1)
 
+        self.dl_check = QCheckBox("다운로드 및 생성 그림도 보기")
+        self.dl_check.setToolTip(
+            "책 폴더의 _images/(URL 그림을 컴파일러·미리보기가 받아 둔 것)와 _external/(```external 블록이 "
+            "외부 도구로 만든 그림) 안 그림도 목록에 넣습니다.")
+        self.dl_check.toggled.connect(lambda _on: self.refresh())
+
         refresh_btn = QPushButton("새로고침")
         refresh_btn.clicked.connect(self.refresh)
         import_btn = QPushButton("가져오기…")
@@ -9000,10 +9063,21 @@ class ImageImportPanel(QDialog):
         box.addWidget(self.hint)
         box.addWidget(interaction_hint)
         box.addWidget(self.list, 1)
+        box.addWidget(self.dl_check)
         box.addLayout(opt_row)
         box.addLayout(btn_row)
 
+        self._restyle()
         self.refresh()
+
+    def _restyle(self):
+        for lb in self._dim:
+            lb.setStyleSheet(dim_label_css(self))
+
+    def changeEvent(self, e):
+        if e.type() == QEvent.PaletteChange and hasattr(self, "_dim"):
+            self._restyle()
+        super().changeEvent(e)
 
     def eventFilter(self, obj, ev):
         if obj is self.list and ev.type() == QEvent.KeyPress and ev.key() == Qt.Key_Space \
@@ -9149,8 +9223,56 @@ class ImageImportPanel(QDialog):
                 it.setToolTip(self._win.workspace.relative(p) if self._win.workspace else str(p))
                 self.list.addItem(it)
 
+        if self.dl_check.isChecked():
+            self._add_download_images()
+
         if self.list.count() == 0:
             self.hint.setText(self.hint.text() + " (그림 없음)")
+
+    def _add_download_images(self):
+        """책 폴더의 _images/ (URL 그림 캐시)와 _external/ (```external 블록 결과) 안 그림을 목록 뒤에 붙인다.
+        삽입 이름은 `폴더/이름` — graphicspath: 폴더 밖이라 이름만으로는 찾을 수 없다."""
+        win = self._win
+        if win._path is None or not win.workspace:
+            return
+        book_dir = LabelIndex.book_files(win.index, win._path)[0].parent
+        total, missing = 0, []
+        for folder, what in ((IMAGE_CACHE_DIR, "다운로드"), (EXTERNAL_CACHE_DIR, "생성")):
+            cache = book_dir / folder
+            if not cache.is_dir():
+                missing.append(folder)
+                continue
+            files = sorted(q for q in cache.iterdir() if q.is_file())
+            pdf_stems = {q.stem.removesuffix(".cropped") for q in files
+                         if q.suffix.lower() == self.PDF_EXTENSION}
+            for p in files:
+                suffix = p.suffix.lower()
+                if suffix not in self.EXTENSIONS and suffix != self.PDF_EXTENSION:
+                    continue
+                # HTML 변환이 PDF 결과 옆에 만든 같은 이름의 PNG 는 부산물이라 뺀다.
+                if suffix == ".png" and p.stem.removesuffix(".cropped") in pdf_stems:
+                    continue
+                if suffix == self.PDF_EXTENSION:
+                    icon = self._pdf_icon(p)
+                else:
+                    pix = QPixmap(str(p))
+                    if pix.isNull() and suffix in (".gif", ".webp"):
+                        pix = self._pillow_first_frame(p)
+                    if pix.isNull():
+                        icon = QFileIconProvider().icon(QFileInfo(str(p)))
+                    else:
+                        icon = QIcon(pix.scaled(self.THUMB_SIZE, self.THUMB_SIZE,
+                                                Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                it = QListWidgetItem(icon, p.name)
+                it.setData(Qt.UserRole, f"{folder}/{p.name}")
+                it.setData(Qt.UserRole + 1, str(p))
+                it.setToolTip(f"{folder}/{p.name}  ({what} 그림)")
+                self.list.addItem(it)
+                total += 1
+        if total:
+            self.hint.setText(self.hint.text() + f" 다운로드·생성 그림 {total}장 포함.")
+        elif len(missing) == 2:
+            self.hint.setText(self.hint.text() + f" ({IMAGE_CACHE_DIR}/ · {EXTERNAL_CACHE_DIR}/ 폴더 없음)")
 
     @classmethod
     def _is_animation_byproduct(cls, p: Path, base: Path) -> bool:
@@ -9281,6 +9403,99 @@ class ImageImportPanel(QDialog):
 # 조각 그림 — LaTeX 조각을 PDF 그림으로 구워 그림 폴더에 넣는 도구
 # ===========================================================================
 
+#: 조각 그림의 "종류". LaTeX 가 아닌 소스(plain TeX, Asymptote, LilyPond, musixtex …)를 그 도구로 직접
+#: 컴파일해 잘린 PDF 를 만든다. 종류는 데이터다 — 환경설정의 JSON 으로 더하거나 같은 id 로 덮어쓸 수 있다.
+#:   label   목록에 보일 이름          ext      소스 확장자          comment  주석 기호(표지 줄에 쓴다)
+#:   engines 고를 수 있는 엔진(없으면 [])  steps    차례로 돌릴 명령들. {src} {stem} {engine} {inc:-I}(검색 폴더마다 -I 폴더)
+#:                                      {glob:패턴}(작업 폴더에서 찾은 파일들로 펼침)
+#:   outputs 결과 PDF 이름 패턴        crop     "ink"(쪽마다 잉크 상자로 자름) 또는 "none"(도구가 이미 자름)
+#:   template 새로 만들 때 채우는 소스  timeout  초
+#:   inject  (선택) 컴파일할 때만 소스에 끼우는 줄 {text, unless(정규식: 소스에 이게 있으면 안 끼움),
+#:           after(정규식: 이 줄 뒤에 끼움, 없으면 맨 앞)}. 저장하는 소스는 바뀌지 않는다.
+JIGSAW_KINDS_BUILTIN = {
+    "plain": {
+        "label": "plain TeX", "ext": ".tex", "comment": "%",
+        "engines": ["xetex", "luatex", "pdftex"],
+        "steps": [["{engine}", "-interaction=nonstopmode", "-halt-on-error", "-no-shell-escape", "{src}"]],
+        "outputs": ["{stem}.pdf"], "crop": "ink", "timeout": 60,
+        "template": "\\nopagenumbers\nHello, plain \\TeX!\n\\bye\n"},
+    "asy": {
+        "label": "Asymptote", "ext": ".asy", "comment": "//",
+        "engines": ["xelatex", "pdflatex", "lualatex"],
+        "steps": [["asy", "-f", "pdf", "-noV", "-tex", "{engine}", "{src}"]],
+        "outputs": ["{stem}.pdf", "{stem}_*.pdf"], "crop": "none", "timeout": 90,
+        "template": "size(5cm);\ndraw(unitcircle, blue + 1bp);\nlabel(\"asy\", (0, 0));\n"},
+    "lilypond": {
+        "label": "LilyPond", "ext": ".ly", "comment": "%",
+        "engines": [],
+        "steps": [["lilypond", "--pdf", "{inc:-I}", "{src}"]],
+        "outputs": ["{stem}.pdf"], "crop": "ink", "timeout": 120,
+        # 쪽 아래의 "Music engraving by LilyPond …" 꼬리말이 그림에 섞이지 않게 한다(소스에 tagline 이 있으면 그대로 둠).
+        "inject": {"text": "\\header { tagline = \"\" }", "unless": "tagline", "after": "^\\s*\\\\version\\b.*$"},
+        "template": "\\version \"2.24.0\"\n\\relative c' { c4 d e f g2 g }\n"},
+    "musixtex": {
+        "label": "musixtex (TeX)", "ext": ".tex", "comment": "%",
+        "engines": [],
+        "steps": [["musixtex", "-F", "pdftex --interaction=nonstopmode", "-p", "{src}"]],
+        "outputs": ["{stem}.pdf"], "crop": "ink", "timeout": 120,
+        "template": "\\input musixtex\n\\parindent0pt\n\\startpiece\n\\Notes\\ql cdef\\enotes\n\\endpiece\n\\bye\n"},
+    "pmx": {
+        "label": "PMX", "ext": ".pmx", "comment": "%",
+        "engines": [],
+        "steps": [["musixtex", "-F", "pdftex --interaction=nonstopmode", "-p", "{src}"]],
+        "outputs": ["{stem}.pdf"], "crop": "ink", "timeout": 120,
+        "template": "1 1 1 1 1\n4 4 4 4 0 0 1\n\n1 1 4 2 0 0\n\n\nc4 d e f g\n"},
+    "mtx": {
+        "label": "M-Tx", "ext": ".mtx", "comment": "%",
+        "engines": [],
+        "steps": [["musixtex", "-F", "pdftex --interaction=nonstopmode", "-p", "{src}"]],
+        "outputs": ["{stem}.pdf"], "crop": "ink", "timeout": 120,
+        "template": "% M-Tx 소스\n"},
+    "mpost": {
+        "label": "MetaPost", "ext": ".mp", "comment": "%",
+        "engines": [],
+        "steps": [["mpost", "-interaction=nonstopmode", "-halt-on-error", "{src}"],
+                  ["mptopdf", "{glob:{stem}.[0-9]*}"]],
+        "outputs": ["{stem}-*.pdf"], "crop": "none", "timeout": 60,
+        "template": "prologues:=3;\nbeginfig(1);\n  draw fullcircle scaled 2cm withpen pencircle scaled 2;\nendfig;\nend\n"},
+}
+
+
+def jigsaw_kinds(extra_json: str = "") -> dict:
+    """내장 종류 + 환경설정 JSON(목록 또는 {id: 정의})의 사용자 종류. 같은 id 는 덮어쓴다(일부 키만 적어도 된다).
+    읽지 못하는 항목은 건너뛴다. 반환 값은 새 딕셔너리다."""
+    out = {k: dict(v) for k, v in JIGSAW_KINDS_BUILTIN.items()}
+    text = (extra_json or "").strip()
+    if not text:
+        return out
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return out
+    if isinstance(data, dict):
+        data = [dict(v, id=k) for k, v in data.items() if isinstance(v, dict)]
+    if not isinstance(data, list):
+        return out
+    for item in data:
+        if not isinstance(item, dict) or not re.match(r"^[A-Za-z][\w-]*$", str(item.get("id", ""))):
+            continue
+        kid = item["id"]
+        if kid == "latex":
+            continue
+        base = dict(out.get(kid, {"label": kid, "comment": "%", "engines": [], "crop": "ink",
+                                  "timeout": 60, "template": "", "outputs": ["{stem}.pdf"]}))
+        base.update({k: v for k, v in item.items() if k != "id"})
+        ext = str(base.get("ext", ""))
+        steps = base.get("steps")
+        if not ext.startswith(".") or not (isinstance(steps, list) and steps
+                                           and all(isinstance(c, list) and c for c in steps)):
+            continue
+        base["crop"] = "none" if base.get("crop") == "none" else "ink"
+        base["engines"] = [str(e) for e in base.get("engines") or []]
+        out[kid] = base
+    return out
+
+
 class JigsawFigure:
     r"""조각 그림의 파일 형식과 컴파일.
 
@@ -9350,18 +9565,259 @@ class JigsawFigure:
         klass = m.group(1) if m and m.group(1) in cls.CLASSES else "standalone"
         return pre, body, engine, klass
 
+    #: 현재 쓰는 종류 표(내장 + 사용자 JSON). 앱이 환경설정을 읽을 때 use_kinds 로 갱신한다.
+    KINDS = dict(JIGSAW_KINDS_BUILTIN)
+    MARK_SLASH = "// ndhmdWriter jigsaw"
+    KIND_LINE_RE = re.compile(r"^(?:%|//) kind: ([\w-]+)\s*$", re.M)
+    ENGINE_LINE_RE = re.compile(r"^(?:%|//) engine: (\S+)\s*$", re.M)
+
+    @classmethod
+    def use_kinds(cls, kinds: dict):
+        cls.KINDS = dict(kinds)
+
+    @classmethod
+    def source_exts(cls) -> list:
+        """조각 그림 소스가 될 수 있는 확장자들(.tex 가 먼저)."""
+        exts = [".tex"]
+        for k in cls.KINDS.values():
+            if k["ext"] not in exts:
+                exts.append(k["ext"])
+        return exts
+
+    @classmethod
+    def is_mark(cls, head: str) -> bool:
+        return head.startswith(cls.MARK) or head.startswith(cls.MARK_SLASH)
+
+    @classmethod
+    def kind_of(cls, text: str) -> str:
+        """소스 머리의 `kind:` 줄. 없으면(옛 파일·LaTeX 조각 그림) "latex"."""
+        m = cls.KIND_LINE_RE.search(text[:400])
+        return m.group(1) if m else "latex"
+
+    @classmethod
+    def any_source_exists(cls, directory: Path, name: str) -> bool:
+        return any((directory / f"{name}{e}").exists() for e in cls.source_exts())
+
     @classmethod
     def sidecar(cls, pdf: Path):
-        """pdf 옆에 이 도구가 만든 .tex 가 있으면 그 경로, 아니면 None."""
-        tex = pdf.with_suffix(".tex")
-        try:
-            if pdf.suffix.lower() == ".pdf" and tex.is_file():
-                with open(tex, encoding="utf-8") as f:
-                    if f.read(len(cls.MARK)) == cls.MARK:
-                        return tex
-        except (OSError, UnicodeDecodeError):
-            pass
+        """pdf 옆에 이 도구가 만든 소스(.tex .ly .asy …)가 있으면 그 경로, 아니면 None.
+        소스 첫 줄의 표지로 알아본다 — 사용자가 따로 둔 같은 이름의 파일은 건드리지 않는다."""
+        if pdf.suffix.lower() != ".pdf":
+            return None
+        for ext in cls.source_exts():
+            src = pdf.with_suffix(ext)
+            try:
+                if src.is_file():
+                    with open(src, encoding="utf-8") as f:
+                        if cls.is_mark(f.read(len(cls.MARK_SLASH))):
+                            return src
+            except (OSError, UnicodeDecodeError):
+                pass
         return None
+
+    # -- 다른 종류(plain TeX · Asymptote · LilyPond · musixtex …) ---------------
+
+    @classmethod
+    def compose_native(cls, kid: str, kind: dict, source: str, engine: str = "", crop=None) -> str:
+        c = kind["comment"]
+        lines = [f"{c} ndhmdWriter jigsaw — 조각 그림 도구가 만든 파일. 도구에서 편집·재생성한다.",
+                 f"{c} kind: {kid}"]
+        if kind["engines"]:
+            lines.append(f"{c} engine: {engine or kind['engines'][0]}")
+        if crop is not None:
+            lines.append(f"{c} crop: {'yes' if crop else 'no'}")
+        lines += [source.strip("\n"), ""]
+        return "\n".join(lines)
+
+    @classmethod
+    def parse_native(cls, text: str):
+        """(종류 id, 엔진, 소스, 자르기 또는 None) 또는 이 도구의 형식이 아니면 None."""
+        if not cls.is_mark(text):
+            return None
+        lines = text.split("\n")
+        kid = cls.kind_of(text)
+        kind = cls.KINDS.get(kid)
+        if kind is None or kid == "latex":
+            return None
+        i, engine, crop = 1, "", None
+        hdr = re.compile(r"^(?:%|//) (kind|engine|crop): (\S+)\s*$")
+        while i < len(lines) and (m := hdr.match(lines[i])):
+            if m.group(1) == "engine":
+                engine = m.group(2)
+            elif m.group(1) == "crop":
+                crop = m.group(2) == "yes"
+            i += 1
+        if engine not in kind["engines"]:
+            engine = kind["engines"][0] if kind["engines"] else ""
+        return kid, engine, "\n".join(lines[i:]).strip("\n"), crop
+
+    @staticmethod
+    def _natural(p: Path):
+        return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", p.name)]
+
+    @classmethod
+    def _expand(cls, step: list, engine: str, outdir: Path, src: Path, search_dirs) -> list:
+        args = []
+        for tok in step:
+            if tok.startswith("{inc:") and tok.endswith("}"):
+                flag = tok[5:-1]
+                for d in search_dirs:
+                    args += [flag, str(d)]
+            elif tok.startswith("{glob:") and tok.endswith("}"):
+                pat = tok[6:-1].replace("{stem}", src.stem)
+                args += [p.name for p in sorted(outdir.glob(pat), key=cls._natural)]
+            else:
+                args.append(tok.replace("{src}", src.name).replace("{stem}", src.stem)
+                            .replace("{engine}", engine))
+        return args
+
+    @staticmethod
+    def _tool_excerpt(text: str, tail: int = 40) -> str:
+        """도구가 낸 글에서 첫 오류부터 몇 줄(없으면 끝부분)."""
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith("!") or re.search(r"\b(error|fatal)\b", line, re.I):
+                return "\n".join(lines[max(0, i - 1):i + 13])
+        return "\n".join(lines[-tail:])
+
+    @classmethod
+    def pdf_pages(cls, pdf: Path) -> int:
+        if have_qtpdf():
+            try:
+                from PySide6.QtPdf import QPdfDocument
+                doc = QPdfDocument()
+                if doc.load(str(pdf)) == QPdfDocument.Error.None_:
+                    n = doc.pageCount()
+                    doc.close()
+                    if n > 0:
+                        return n
+            except Exception:
+                pass
+        if shutil.which("pdfinfo"):
+            try:
+                out = subprocess.run(["pdfinfo", str(pdf)], capture_output=True, timeout=20,
+                                     creationflags=_NO_WINDOW).stdout.decode("utf-8", "replace")
+                m = re.search(r"^Pages:\s+(\d+)", out, re.M)
+                if m:
+                    return int(m.group(1))
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+        return 1
+
+    @classmethod
+    def _crop_ink(cls, pdfs: list, outdir: Path, env):
+        """각 PDF 의 쪽마다 잉크 상자로 잘라 낱장 PDF 로. (성공?, 목록 또는 오류, 로그)."""
+        crop_engine = next((e for e in ("pdflatex", "xelatex", "lualatex") if shutil.which(e)), None)
+        if crop_engine is None:
+            return False, "자르려면 pdflatex/xelatex 가 필요합니다.", ""
+        out, n = [], 0
+        for pdf in pdfs:
+            pages = cls.pdf_pages(pdf)
+            try:
+                boxes = cls._page_boxes(pdf, pages, outdir)
+            except Exception as e:
+                return False, f"쪽을 자르지 못했습니다: {e}", ""
+            for i, box in enumerate(boxes, start=1):
+                if box is None:
+                    continue
+                n += 1
+                l, b, r, t = box
+                crop = outdir / f"crop-{n}.tex"
+                crop.write_text(
+                    "\\documentclass[border=0pt]{standalone}\n\\usepackage{graphicx}\n"
+                    "\\begin{document}"
+                    f"\\includegraphics[page={i},trim={l:.2f}bp {b:.2f}bp {r:.2f}bp {t:.2f}bp,clip]"
+                    "{" + pdf.name + "}\\end{document}\n", encoding="utf-8")
+                ok, why = cls._run(crop_engine, crop, outdir, env)
+                if not ok:
+                    return False, f"{n}번째 쪽을 자르지 못했습니다: {why}", cls._log_excerpt(outdir / f"crop-{n}.log")
+                out.append(outdir / f"crop-{n}.pdf")
+        if not out:
+            return False, "그림이 비어 있습니다(찍힌 것이 없는 쪽뿐입니다).", ""
+        return True, out, ""
+
+    @staticmethod
+    def _inject(kind: dict, source: str) -> str:
+        """kind["inject"] 가 있으면 컴파일용 소스에 한 줄을 끼운다(저장할 소스는 그대로)."""
+        inj = kind.get("inject")
+        if not isinstance(inj, dict) or not inj.get("text"):
+            return source
+        try:
+            if inj.get("unless") and re.search(inj["unless"], source):
+                return source
+            lines = source.split("\n")
+            at = -1
+            if inj.get("after"):
+                rx = re.compile(inj["after"])
+                at = next((i for i, ln in enumerate(lines) if rx.search(ln)), -1)
+            lines.insert(at + 1, inj["text"])
+            return "\n".join(lines)
+        except re.error:
+            return source
+
+    @classmethod
+    def compile_native(cls, kid: str, source: str, outdir: Path, search_dirs=(), engine: str = "",
+                       crop=None):
+        """LaTeX 가 아닌 종류를 그 도구로 직접 컴파일한다. (성공?, 낱장 PDF 목록 또는 오류 요약, 로그 발췌).
+        임시 폴더(outdir)에서 `jigsaw<확장자>` 로 돌리고, 도구가 안 돌면 그 이유를 알린다."""
+        kind = cls.KINDS.get(kid)
+        if kind is None:
+            return False, f"알 수 없는 종류: {kid}", ""
+        if kind["engines"] and engine not in kind["engines"]:
+            engine = kind["engines"][0]
+        for step in kind["steps"]:
+            exe = step[0].replace("{engine}", engine)
+            if shutil.which(exe) is None:
+                return False, (f"{exe} 을(를) 찾지 못했습니다. 설치돼 있는지, "
+                               "환경설정의 'ndhmd PATH' 에 폴더가 있는지 확인하세요."), ""
+        outdir.mkdir(parents=True, exist_ok=True)
+        for old in outdir.iterdir():
+            if old.is_file():
+                old.unlink(missing_ok=True)
+        src = outdir / ("jigsaw" + kind["ext"])
+        src.write_text(cls.compose_native(kid, kind, cls._inject(kind, source), engine, crop),
+                       encoding="utf-8")
+        env = dict(os.environ)
+        env["TEXINPUTS"] = os.pathsep.join(
+            [*(str(d) for d in search_dirs), env.get("TEXINPUTS", "")])
+        timeout = float(kind.get("timeout", cls.TIMEOUT))
+        text = ""
+        for step in kind["steps"]:
+            args = cls._expand(step, engine, outdir, src, search_dirs)
+            try:
+                run = subprocess.run(args, cwd=outdir, env=env, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     timeout=timeout, creationflags=_NO_WINDOW)
+            except subprocess.TimeoutExpired:
+                return False, f"{int(timeout)}초 안에 끝나지 않아 중단했습니다.", text
+            except OSError as e:
+                return False, f"{args[0]} 을(를) 실행하지 못했습니다: {e}", text
+            text += run.stdout.decode("utf-8", "replace")
+            if run.returncode != 0:
+                ex = cls._tool_excerpt(text)
+                first = next((ln for ln in ex.splitlines() if ln.strip()), "")
+                return False, f"{args[0]} 이(가) 오류로 끝났습니다. {first}".strip(), ex
+        pdfs, seen = [], set()
+        for pat in kind["outputs"]:
+            for p in sorted(outdir.glob(pat.replace("{stem}", src.stem)), key=cls._natural):
+                if p.suffix.lower() == ".pdf" and p not in seen and p.stat().st_size:
+                    seen.add(p)
+                    pdfs.append(p)
+        ex = cls._tool_excerpt(text)
+        if not pdfs:
+            return False, "PDF 가 만들어지지 않았습니다. (도구가 PDF 를 내도록 명령이 맞는지 확인하세요.)", ex
+        do_crop = (kind["crop"] == "ink") if crop is None else bool(crop)
+        if not do_crop:
+            return True, pdfs, ex
+        ok, res, log = cls._crop_ink(pdfs, outdir, env)
+        return ok, res, (log or ex)
+
+    @classmethod
+    def compile_kind(cls, kid: str, pre: str, body: str, engine: str, klass: str,
+                     outdir: Path, search_dirs=(), crop=None):
+        if kid == "latex":
+            return cls.compile(pre, body, outdir, search_dirs, engine, klass)
+        return cls.compile_native(kid, body, outdir, search_dirs, engine, crop)
 
     @classmethod
     def locate(cls, pdf: Path):
@@ -9613,13 +10069,13 @@ class _JigsawWorker(QThread):
 
     done = Signal(bool, object, str)   # 성공?, PDF 경로 목록 또는 오류 요약, 로그 발췌
 
-    def __init__(self, preamble, body, outdir, search_dirs, engine, klass, parent=None):
+    def __init__(self, kid, preamble, body, outdir, search_dirs, engine, klass, crop=None, parent=None):
         super().__init__(parent)
-        self._args = (preamble, body, outdir, tuple(search_dirs), engine, klass)
+        self._args = (kid, preamble, body, engine, klass, outdir, tuple(search_dirs), crop)
 
     def run(self):
         try:
-            ok, res, log = JigsawFigure.compile(*self._args)
+            ok, res, log = JigsawFigure.compile_kind(*self._args)
         except Exception as e:             # 스레드에서 예외가 새면 앱이 죽는다
             ok, res, log = False, f"예기치 못한 오류: {e}", ""
         self.done.emit(ok, res, log)
@@ -9642,7 +10098,10 @@ class JigsawDialog(QDialog):
         self._edit_tex = tex
         self._worker = None
         self._tmp = Path(tempfile.mkdtemp(prefix="ndhmd_jigsaw_"))
-        self._built_key = None             # 마지막으로 성공한 컴파일의 (프리앰블, 본문, 엔진, 클래스)
+        self._kinds = jigsaw_kinds(window.prefs.jigsaw_kinds_json())
+        JigsawFigure.use_kinds(self._kinds)
+        self._kind = "latex"
+        self._built_key = None             # 마지막으로 성공한 컴파일의 (프리앰블, 본문, 엔진, 클래스, 종류)
         self._built_pages = []             # 그때 나온 낱장 PDF 들(임시 폴더 안)
         self._after = None                 # 컴파일이 끝나면 이어서 할 일
         self.setAttribute(Qt.WA_DeleteOnClose)
@@ -9657,6 +10116,14 @@ class JigsawDialog(QDialog):
         self.dest_label = QLabel()
         self.dest_label.setStyleSheet("color: gray;")
 
+        self.kind_combo = QComboBox()
+        self.kind_combo.addItem("LaTeX", "latex")
+        for kid, k in self._kinds.items():
+            self.kind_combo.addItem(k["label"], kid)
+        self.kind_combo.setToolTip(
+            "LaTeX: 지금까지의 방식(프리앰블 + 그림 코드).\n"
+            "그 밖의 종류는 소스를 그 도구로 직접 컴파일해 잘린 PDF 를 만든다.\n"
+            "종류는 환경설정에서 더하거나 바꿀 수 있다.")
         self.class_combo = QComboBox()
         self.class_combo.addItems(JigsawFigure.CLASSES)
         self.class_combo.setToolTip(
@@ -9722,12 +10189,26 @@ class JigsawDialog(QDialog):
         name_row.addWidget(QLabel(".pdf"))
         lay.addLayout(name_row)
         opt_row = QHBoxLayout()
-        opt_row.addWidget(QLabel("클래스:"))
+        opt_row.addWidget(QLabel("종류:"))
+        opt_row.addWidget(self.kind_combo)
+        opt_row.addSpacing(12)
+        self.class_lbl = QLabel("클래스:")
+        opt_row.addWidget(self.class_lbl)
         opt_row.addWidget(self.class_combo)
         opt_row.addSpacing(12)
-        opt_row.addWidget(QLabel("엔진:"))
+        self.engine_lbl = QLabel("엔진:")
+        opt_row.addWidget(self.engine_lbl)
         opt_row.addWidget(self.engine_combo)
         opt_row.addSpacing(12)
+        self.crop_chk = QCheckBox("실행 후 자르기")
+        self.crop_chk.setToolTip(
+            "도구가 낸 PDF 를 쪽마다 그림이 있는 영역만 남기고 잘라 낱장 그림으로 만듭니다.\n"
+            "PDF 를 래스터로 그려 잉크 상자를 재고 TeX(\\includegraphics 의 trim·clip)로 자르므로\n"
+            "pdfcrop·Ghostscript 가 필요 없고 그림은 벡터 그대로입니다. 여러 쪽이면 쪽마다 따로 저장합니다.\n"
+            "이미 알맞게 잘라 내는 도구(Asymptote 등)는 끄는 것이 기본입니다.")
+        self.crop_chk.stateChanged.connect(lambda _s: setattr(self, "_crop_touched", True))
+        self._crop_touched = False
+        opt_row.addWidget(self.crop_chk)
         self.png_chk = QCheckBox("HTML용 PNG도 만들기")
         self.png_chk.setToolTip(
             "PDF 옆에 같은 이름의 PNG 를 둔다. ndhmd2html(HTML 변환)은 PDF 를 못 보이므로 "
@@ -9738,9 +10219,11 @@ class JigsawDialog(QDialog):
         opt_row.addStretch(1)
         lay.addLayout(opt_row)
         lay.addWidget(self.dest_label)
-        lay.addWidget(QLabel("프리앰블 (패키지·색 정의 등)"))
+        self.pre_lbl = QLabel("프리앰블 (패키지·색 정의 등)")
+        lay.addWidget(self.pre_lbl)
         lay.addWidget(self.pre_edit)
-        lay.addWidget(QLabel("그림 코드"))
+        self.body_lbl = QLabel("그림 코드")
+        lay.addWidget(self.body_lbl)
         lay.addWidget(self.body_edit, 2)
         lay.addWidget(scroll, 2)
         lay.addWidget(self.status)
@@ -9755,6 +10238,12 @@ class JigsawDialog(QDialog):
             self.pre_edit.setPlainText(window.prefs.jigsaw_preamble())
             self.engine_combo.setCurrentText(window.prefs.jigsaw_engine())
             self.class_combo.setCurrentText(window.prefs.jigsaw_class())
+            last = window.prefs.jigsaw_kind()
+            i = self.kind_combo.findData(last)
+            self.kind_combo.setCurrentIndex(max(0, i))
+            self._kind = self.kind_combo.currentData()
+            self._apply_kind(fill_template=True)
+            self.kind_combo.currentIndexChanged.connect(self._on_kind_changed)
         self._update_dest_label()
 
     # -- 준비 -----------------------------------------------------------------
@@ -9764,25 +10253,89 @@ class JigsawDialog(QDialog):
         self.name_edit.setText(tex.stem)
         self.name_edit.setReadOnly(True)
         try:
-            parsed = JigsawFigure.parse(tex.read_text(encoding="utf-8"))
+            text = tex.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            parsed = None
+            text = ""
+        kid = JigsawFigure.kind_of(text)
+        if kid == "latex":
+            parsed = JigsawFigure.parse(text)
+        else:
+            nat = JigsawFigure.parse_native(text)
+            parsed = None if nat is None else ("", nat[2], nat[1], "standalone", nat[3])
         if parsed is None:
-            self.status.setText(f"{tex.name} 을(를) 읽지 못했습니다.")
+            self.status.setText(f"{tex.name} 을(를) 읽지 못했습니다"
+                                + (f" (종류 '{kid}' 이(가) 환경설정에 없습니다)." if kid != "latex" else "."))
             self.save_btn.setEnabled(False)
             return
+        i = self.kind_combo.findData(kid)
+        self.kind_combo.setCurrentIndex(max(0, i))
+        self.kind_combo.setEnabled(False)          # 만든 종류는 바꾸지 않는다
+        self._kind = kid
+        self._apply_kind(fill_template=False)
         self.pre_edit.setPlainText(parsed[0])
         self.body_edit.setPlainText(parsed[1])
         self.engine_combo.setCurrentText(parsed[2])
         self.class_combo.setCurrentText(parsed[3])
+        if kid != "latex":
+            crop = parsed[4] if len(parsed) > 4 else None
+            if crop is None:                        # 표지에 없던 옛 파일은 그 종류의 기본값
+                crop = self._kinds[kid]["crop"] == "ink"
+            self.crop_chk.setChecked(bool(crop))
         files = JigsawFigure.figure_files(tex.parent, tex.stem)
         if files:
             self._show_pdfs(files)         # 지금 그림 그대로 먼저 보여 준다
 
+    def _apply_kind(self, fill_template: bool):
+        """종류에 맞게 입력칸·콤보를 바꾼다. fill_template 이면 소스가 비었거나 이전 종류의 틀 그대로일 때 새 틀을 채운다."""
+        kid = self._kind
+        latex = kid == "latex"
+        for w in (self.class_combo, self.class_lbl, self.pre_edit, self.pre_lbl):
+            w.setVisible(latex)
+        if latex:
+            engines = list(JigsawFigure.ENGINES)
+            self.body_lbl.setText("그림 코드")
+            self.body_edit.setPlaceholderText(
+                "\\begin{tikzpicture}\n  \\draw[blue, thick] (0,0) circle (1cm);\n\\end{tikzpicture}")
+        else:
+            k = self._kinds[kid]
+            engines = list(k["engines"])
+            self.body_lbl.setText(f"{k['label']} 소스  (명령: {' '.join(k['steps'][0][:3])} …)")
+            self.body_edit.setPlaceholderText(k.get("template", ""))
+        cur = self.engine_combo.currentText()
+        self.engine_combo.blockSignals(True)
+        self.engine_combo.clear()
+        self.engine_combo.addItems(engines)
+        if cur in engines:
+            self.engine_combo.setCurrentText(cur)
+        self.engine_combo.blockSignals(False)
+        for w in (self.engine_combo, self.engine_lbl):
+            w.setVisible(bool(engines))
+        self.crop_chk.setVisible(not latex)
+        if not latex and fill_template:
+            saved = self._win.prefs.s.value(f"prefs/jigsaw_crop_{kid}", None)
+            on = (self._kinds[kid]["crop"] == "ink") if saved in (None, "") else str(saved).lower() in ("true", "1", "yes")
+            self.crop_chk.blockSignals(True)
+            self.crop_chk.setChecked(on)
+            self.crop_chk.blockSignals(False)
+        if fill_template and not latex:
+            body = self.body_edit.toPlainText()
+            templates = {k.get("template", "").strip() for k in self._kinds.values()}
+            if not body.strip() or body.strip() in templates:
+                self.body_edit.setPlainText(self._kinds[kid].get("template", ""))
+        elif fill_template and latex:
+            body = self.body_edit.toPlainText()
+            if body.strip() in {k.get("template", "").strip() for k in self._kinds.values()}:
+                self.body_edit.clear()
+
+    def _on_kind_changed(self, _i):
+        self._kind = self.kind_combo.currentData()
+        self._apply_kind(fill_template=True)
+        self.status.setText("")
+
     def _free_name(self) -> str:
         d = self._dest_dir
         n = 1
-        while d is not None and ((d / f"jigsaw-{n}.tex").exists()
+        while d is not None and (JigsawFigure.any_source_exists(d, f"jigsaw-{n}")
                                  or JigsawFigure.figure_files(d, f"jigsaw-{n}")):
             n += 1
         return f"jigsaw-{n}"
@@ -9797,14 +10350,19 @@ class JigsawDialog(QDialog):
     # -- 컴파일 ---------------------------------------------------------------
 
     def _key(self):
-        return (self.pre_edit.toPlainText(), self.body_edit.toPlainText(),
-                self.engine_combo.currentText(), self.class_combo.currentText())
+        if self._kind == "latex":
+            return (self.pre_edit.toPlainText(), self.body_edit.toPlainText(),
+                    self.engine_combo.currentText(), self.class_combo.currentText(), "latex", None)
+        return ("", self.body_edit.toPlainText(), self.engine_combo.currentText(), "standalone", self._kind,
+                self.crop_chk.isChecked())
 
     def _compile(self, then):
         if self._worker is not None:
             return
         if not self.body_edit.toPlainText().strip():
             self.status.setText("그림 코드를 적어 주세요.")
+            return
+        if self._kind != "latex" and not self._confirm_run():
             return
         self._after = then
         self.status.setText("컴파일 중…")
@@ -9813,10 +10371,37 @@ class JigsawDialog(QDialog):
         self.save_btn.setEnabled(False)
         key = self._key()
         self._pending_key = key
-        self._worker = _JigsawWorker(key[0], key[1], self._tmp,
-                                     self._win.jigsaw_search_dirs(), key[2], key[3], self)
+        self._worker = _JigsawWorker(key[4], key[0], key[1], self._tmp,
+                                     self._win.jigsaw_search_dirs(), key[2], key[3], key[5], self)
         self._worker.done.connect(self._on_compiled)
         self._worker.start()
+
+    def _confirm_run(self) -> bool:
+        """LaTeX 가 아닌 종류는 외부 도구를 돌리므로, 명령을 보이고 한 번 확인받는다("다시 묻지 않기"로 기억).
+        명령이 바뀌면(환경설정에서 고치면) 다시 묻는다."""
+        kind = self._kinds[self._kind]
+        sig = hashlib.sha1(json.dumps([self._kind, kind["steps"]], sort_keys=True).encode()).hexdigest()[:12]
+        trusted = set(filter(None, self._win.prefs.s.value("prefs/jigsaw_trusted", "", type=str).split(",")))
+        if sig in trusted:
+            return True
+        eng = self.engine_combo.currentText()
+        cmds = "\n".join("  " + " ".join(step).replace("{engine}", eng) for step in kind["steps"])
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("조각 그림")
+        box.setText(f"{kind['label']} 소스를 컴파일하려고 다음 명령을 실행합니다.")
+        box.setInformativeText(cmds + "\n\n소스에 적힌 대로 외부 도구가 돌아갑니다. 믿을 수 있는 소스일 때만 실행하세요.")
+        again = QCheckBox("이 명령은 다시 묻지 않기")
+        box.setCheckBox(again)
+        run_btn = box.addButton("실행", QMessageBox.AcceptRole)
+        box.addButton("취소", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not run_btn:
+            return False
+        if again.isChecked():
+            trusted.add(sig)
+            self._win.prefs.write(jigsaw_trusted=",".join(sorted(trusted)))
+        return True
 
     def _on_compiled(self, ok: bool, res, log: str):
         worker, self._worker = self._worker, None
@@ -9912,7 +10497,7 @@ class JigsawDialog(QDialog):
                                 "파일 이름에는 글자·숫자·점·밑줄·붙임표만 쓸 수 있습니다.")
             return
         if self._edit_tex is None and (
-                (self._dest_dir / f"{name}.tex").exists()
+                JigsawFigure.any_source_exists(self._dest_dir, name)
                 or JigsawFigure.figure_files(self._dest_dir, name)):
             if QMessageBox.question(
                     self, "조각 그림",
@@ -9924,19 +10509,24 @@ class JigsawDialog(QDialog):
             self._write_out(name)
 
     def _write_out(self, name: str):
-        pre, body, engine, klass = self._key()
+        pre, body, engine, klass, kid, crop = self._key()
         pages = self._built_pages
         names = ([f"{name}.pdf"] if len(pages) == 1
                  else [f"{name}-{i}.pdf" for i in range(1, len(pages) + 1)])
-        tex_dest = self._dest_dir / f"{name}.tex"
+        kind = self._kinds.get(kid)
+        tex_dest = self._dest_dir / f"{name}{kind['ext'] if kind else '.tex'}"
+        if self._edit_tex is not None:
+            tex_dest = self._edit_tex
         ours = JigsawFigure.sidecar(self._dest_dir / f"{name}.pdf") is not None
         before = [p.name for p in JigsawFigure.figure_files(self._dest_dir, name)]
         try:
             self._dest_dir.mkdir(parents=True, exist_ok=True)
             for src, dst in zip(pages, names):
                 shutil.copyfile(str(src), str(self._dest_dir / dst))
-            tex_dest.write_text(JigsawFigure.compose(pre, body, engine, klass),
-                                encoding="utf-8")
+            tex_dest.write_text(
+                JigsawFigure.compose(pre, body, engine, klass) if kid == "latex"
+                else JigsawFigure.compose_native(kid, kind, body, engine, crop),
+                encoding="utf-8")
             # 쪽 수가 바뀌어 더는 안 쓰는 낱장은 지운다 — 이 도구가 만든
             # 그림(옆에 .tex 가 있었던 것)일 때만.
             stale = [n for n in before if n not in names] if ours else []
@@ -9963,8 +10553,11 @@ class JigsawDialog(QDialog):
             QMessageBox.warning(self, "조각 그림", f"저장하지 못했습니다: {e}")
             return
         win = self._win
-        win.prefs.write(jigsaw_preamble=pre, jigsaw_engine=engine, jigsaw_class=klass,
-                        jigsaw_png=self.png_chk.isChecked())
+        if kid == "latex":
+            win.prefs.write(jigsaw_preamble=pre, jigsaw_engine=engine, jigsaw_class=klass)
+        win.prefs.write(jigsaw_kind=kid, jigsaw_png=self.png_chk.isChecked())
+        if kid != "latex":
+            win.prefs.write(**{f"jigsaw_crop_{kid}": bool(crop)})
         if png_fail:
             QMessageBox.warning(self, "조각 그림", f"HTML용 PNG 를 만들지 못했습니다: {png_fail}")
         panel = getattr(win, "_image_import_panel", None)
@@ -13955,7 +14548,7 @@ class HelpDialog(QDialog):
         html = f"""
         <h2 style="margin-bottom:2px">ndhmdWriter</h2>
         <div style="color:#7a7368">버전 {__version__}</div>
-        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.21.3, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
+        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.22.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
         <p>
         지은이: {APP_AUTHOR}<br>
         라이선스: {APP_LICENSE}
@@ -16838,6 +17431,7 @@ class MainWindow(QMainWindow):
         self._settings = QSettings(self.ORG, self.APP)
         self.prefs = Prefs(self._settings)
         apply_extra_path(self.prefs.extra_path())       # 도구를 찾기 전에 PATH 에 얹는다
+        JigsawFigure.use_kinds(jigsaw_kinds(self.prefs.jigsaw_kinds_json()))
 
         saved = self._settings.value("workspace/root", "")
         self.workspace = Workspace(Path(saved)) if saved else Workspace()
@@ -20119,6 +20713,45 @@ class MainWindow(QMainWindow):
 
     # -- 컴파일 -------------------------------------------------------------------
 
+    #: ndhmd4tex/ndhmd2html 이 "```external 블록을 실행하려면 --external 이 필요하다"고 알릴 때의 문구.
+    _EXTERNAL_NEEDED_RE = re.compile(r"--external")
+    _EXTERNAL_TOOL_RE = re.compile(r"external 도구 '([^']+)'")
+
+    def external_args(self, force: bool = False) -> list:
+        """`--external`: 환경설정이 항상 허용이거나, 이 앱을 연 동안 허용했거나, 이번만 허용(force)일 때."""
+        if force or getattr(self, "_external_ok", False) or self.prefs.external_always():
+            return ["--external"]
+        return []
+
+    def offer_external(self, raw: str, retry) -> bool:
+        """변환이 "--external 이 필요하다"며 실패했으면 실행해도 되는지 묻고, 허용하면 retry(True)를 부른다.
+        물어봤으면(허용이든 아니든) True, 이 실패와 상관없으면 False.
+        결과가 이미 _external/ 에 있으면 이 실패 자체가 나지 않으므로, 묻는 것은 정말 실행해야 할 때뿐이다."""
+        text = "\n".join(strip_tool_prefix(l) for l in raw.splitlines())
+        if not self._EXTERNAL_NEEDED_RE.search(text) or "external" not in text:
+            return False
+        if self.external_args():                     # 이미 허용한 채로 돌렸는데도 이 문구면 다른 문제다
+            return False
+        tools = sorted(set(self._EXTERNAL_TOOL_RE.findall(text)))
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("외부 도구 실행")
+        box.setText("이 원고에는 외부 도구를 실행해야 결과가 나오는 ```external 블록이 있습니다."
+                    + (f"\n도구: {', '.join(tools)}" if tools else ""))
+        box.setInformativeText(
+            "실행할 명령은 원고의 mapping 파일 `external:` 에 등록된 것입니다. 믿을 수 있는 원고일 때만 "
+            "실행하세요. 결과는 책 폴더의 _external/ 에 저장되고, 블록 내용이 같으면 다음부터는 묻지 않습니다.")
+        again = QCheckBox("이 앱을 닫을 때까지 다시 묻지 않기")
+        box.setCheckBox(again)
+        run_btn = box.addButton("실행", QMessageBox.AcceptRole)
+        box.addButton("취소", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is run_btn:
+            if again.isChecked():
+                self._external_ok = True
+            retry(True)
+        return True
+
     def animation_args(self) -> list:
         """환경설정의 애니메이션 설정 → ndhmd4tex 인자. 꺼져 있으면 없다.
         `--animation` 은 값을 받을 수 있는 옵션이라 `=` 로 붙여야 한다 — 떼어 쓰면 뒤의
@@ -20177,7 +20810,10 @@ class MainWindow(QMainWindow):
         except ValueError as e:
             QMessageBox.warning(self, "HTML 변환", f"옵션을 읽지 못했습니다: {e}")
             return
-        cmd = self.html_tool.command([*args, str(target)])
+        self._start_html(target, args, open_after)
+
+    def _start_html(self, target: Path, args: list, open_after: bool, external: bool = False):
+        cmd = self.html_tool.command([*args, *self.external_args(external), str(target)])
         if cmd is None:
             return
         out = html_output_path(target, args)
@@ -20186,7 +20822,8 @@ class MainWindow(QMainWindow):
         proc.setWorkingDirectory(str(target.parent))
         proc.setProcessChannelMode(QProcess.MergedChannels)
         proc.finished.connect(
-            lambda code, stt, p=proc, o=out, oa=open_after: self._html_finished(p, o, oa))
+            lambda code, stt, p=proc, o=out, oa=open_after, t=target, a=list(args):
+            self._html_finished(p, o, oa, t, a))
         proc.errorOccurred.connect(lambda e, p=proc: self._html_failed(p))
         self._html_proc = proc
         proc.start(cmd[0], cmd[1:])
@@ -20197,11 +20834,14 @@ class MainWindow(QMainWindow):
         self._html_proc = None
         QMessageBox.warning(self, "실행 실패", "ndhmd2html 를 실행하지 못했습니다.")
 
-    def _html_finished(self, proc, out: Path, open_after: bool):
+    def _html_finished(self, proc, out: Path, open_after: bool, target: Path = None, args: list = None):
         if proc is not self._html_proc:
             return
         self._html_proc = None
         raw = decode_subprocess_output(bytes(proc.readAllStandardOutput())).strip()
+        if proc.exitCode() != 0 and target is not None and self.offer_external(
+                raw, lambda ext, t=target, a=args, oa=open_after: self._start_html(t, a, oa, ext)):
+            return
         if proc.exitCode() != 0 or not out.exists():
             ConsoleOutputDialog(self, "HTML 변환 실패", raw or "출력이 없습니다.").show()
             self.statusBar().showMessage("HTML 변환 실패", 5000)
@@ -20244,8 +20884,9 @@ class MainWindow(QMainWindow):
         self._compile_target = target
         self._start_convert(target)
 
-    def _start_convert(self, target: Path):
-        cmd = self.tool.command(["--syncinfo", *self.animation_args(), str(target)])
+    def _start_convert(self, target: Path, external: bool = False):
+        cmd = self.tool.command(["--syncinfo", *self.animation_args(),
+                                 *self.external_args(external), str(target)])
         if cmd is None:
             return
         self.issues.setVisible(False)
@@ -20273,6 +20914,8 @@ class MainWindow(QMainWindow):
         self._refresh_result_action()
 
         if proc.exitCode() != 0:
+            if self.offer_external(raw, lambda ext, t=target: self._start_convert(t, ext)):
+                return
             issues = self._parse_issue_lines(raw, target)
             if issues:
                 n_err = sum(1 for _, _, lv, _ in issues if lv == "오류")
@@ -20668,8 +21311,10 @@ class MainWindow(QMainWindow):
         if not self._ensure_tool():
             return
 
-        target = self._path
-        cmd = self.tool.command([*self.animation_args(), str(target)])
+        self._start_convert_open(self._path)
+
+    def _start_convert_open(self, target: Path, external: bool = False):
+        cmd = self.tool.command([*self.animation_args(), *self.external_args(external), str(target)])
         if cmd is None:
             return
 
@@ -20690,6 +21335,8 @@ class MainWindow(QMainWindow):
         raw = decode_subprocess_output(bytes(proc.readAllStandardOutput()))
 
         if proc.exitCode() != 0:
+            if self.offer_external(raw, lambda ext, t=target: self._start_convert_open(t, ext)):
+                return
             issues = self._parse_issue_lines(raw, target)
             if issues:
                 n_err = sum(1 for _, _, lv, _ in issues if lv == "오류")
@@ -23899,6 +24546,10 @@ _EN = {
     '.bib {}개 파일': '{0} .bib files',
     '그림 들여오기': 'Import images',
     '본문 삽입': 'Insert into text',
+    '실행 후 자르기': 'Crop after running',
+    '도구가 낸 PDF 를 쪽마다 그림이 있는 영역만 남기고 잘라 낱장 그림으로 만듭니다.\nPDF 를 래스터로 그려 잉크 상자를 재고 TeX(\\includegraphics 의 trim·clip)로 자르므로\npdfcrop·Ghostscript 가 필요 없고 그림은 벡터 그대로입니다. 여러 쪽이면 쪽마다 따로 저장합니다.\n이미 알맞게 잘라 내는 도구(Asymptote 등)는 끄는 것이 기본입니다.': 'Crops the tool\'s PDF page by page to the drawn area and makes each page a separate figure.\nIt measures the ink box from a raster and trims with TeX (\\includegraphics trim/clip), so pdfcrop and\nGhostscript are not needed and the figure stays vector. Multiple pages are saved separately.\nTools that already crop properly (Asymptote etc.) default to off.',
+    '다운로드 및 생성 그림도 보기': 'Show downloaded and generated images too',
+    '책 폴더의 _images/(URL 그림을 컴파일러·미리보기가 받아 둔 것)와 _external/(```external 블록이 외부 도구로 만든 그림) 안 그림도 목록에 넣습니다.': 'Also list images in the book folder\'s _images/ (URL images cached by the compiler or previews) and _external/ (images made by ```external blocks).',
     '스페이스·Esc: 닫기 · ←→: 이웃 그림': 'Space/Esc: close · ←→: neighbouring image',
     '그림 크게 보기': 'Large preview',
     '미리보기를 만들 수 없습니다.': 'Cannot make a preview.',
