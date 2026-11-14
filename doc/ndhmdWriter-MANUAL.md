@@ -1,6 +1,6 @@
 ---
 title: ndhmdWriter 사용자 설명서 (참조편) — 초고
-author: ndhmdWriter 0.9.2 기준
+author: ndhmdWriter 0.9.4 기준
 toplevel: chapter
 setup: [articlelike.nmd,defaultnoto.nmd]
 classoption+: chapter
@@ -29,7 +29,7 @@ compileoption: --missingchar
 
 # 이 설명서에 대하여 {#ch:about}
 
-이 설명서는 ***ndhmdWriter*** 버전 0.9.1의 **참조편**이다. 처음 쓰는 사람을 안내하는 글이 아니라, 앱이 가진 기능을 메뉴 순서와 화면 구성에 맞추어 빠짐없이 적은 사전이다. "왜 이렇게 만들었는가"는 별도의 안내문(*무엇을 위해 만들었는가*)이 다루고, 이 글은 "무엇이 어떻게 동작하는가"만 적는다.
+이 설명서는 ***ndhmdWriter*** 버전 0.9.4의 **참조편**이다. 처음 쓰는 사람을 안내하는 글이 아니라, 앱이 가진 기능을 메뉴 순서와 화면 구성에 맞추어 빠짐없이 적은 사전이다. "왜 이렇게 만들었는가"는 별도의 안내문(*무엇을 위해 만들었는가*)이 다루고, 이 글은 "무엇이 어떻게 동작하는가"만 적는다.
 
 ## 표기 약속 {#sec:notation}
 
@@ -1178,8 +1178,10 @@ ndhmd4tex 0.22부터 원고에 ` ```external tool=도구이름, caption=…, lab
   - **실행 확인**: 처음 컴파일할 때 실제 명령을 보여 주고 `실행`/`취소`를 묻는다. `이 명령은 다시 묻지 않기`를 켜면 그 명령은 기억한다(명령을 고치면 다시 묻는다). 소스에 적힌 대로 외부 도구가 돌기 때문이다. Asymptote는 기본이 안전 모드이고 LilyPond는 `-dsafe`로 돌리며, TeX는 셸 이스케이프를 끈다.
   - **작업 방식**: 임시 폴더에서 `jigsaw.<확장자>`로 돌리고, 결과 PDF만 그림 폴더로 가져온다. 소스가 다른 파일을 부르는 경우를 위해 그림 폴더들(`graphicspath:`)과 작업공간 루트를 `TEXINPUTS`에 얹고, LilyPond에는 `-I`로 준다. 도구가 나오는 PDF가 한 장 전체 용지이면(plain TeX, LilyPond, musixtex) **쪽마다 잉크 상자로 잘라** 낱장 PDF로 만들고, 이미 잘라 내는 도구(Asymptote, MetaPost)는 그대로 쓴다. 결과가 여러 개(Asymptote 그림 여럿, 여러 쪽)면 `이름-1.pdf`, `이름-2.pdf` …로 저장한다.
   - **도구를 찾는 법**: 실행 파일은 PATH에서 찾는다. 안 보이면 환경설정의 `ndhmd PATH`에 폴더를 적는다(예: Homebrew의 `/opt/homebrew/bin`).
-  - **종류 더하기·바꾸기**: 환경설정 `컴파일·도구` 탭의 `조각 그림 종류`에 JSON 목록을 적는다. 같은 `id`(`plain` `asy` `lilypond` `musixtex` `pmx` `mtx` `mpost`)는 적은 키만 덮어쓰고(예: `[{"id": "asy", "engines": ["pdflatex"]}]`), 새 `id`는 `ext`(점 포함)와 `steps`(명령 목록의 목록)가 있어야 한다. 키: `label`, `ext`, `comment`(주석 기호), `engines`, `steps`, `outputs`(결과 PDF 이름 패턴), `crop`(`ink`|`none`), `template`, `timeout`(초). 명령에는 `{src}` `{stem}` `{engine}`, `{inc:-I}`(검색 폴더마다 `-I 폴더`로 펼침), `{glob:패턴}`(작업 폴더에서 찾은 파일들로 펼침)을 쓴다. 새로 여는 조각 그림 창부터 적용된다. 예(내장 MetaPost 정의): `{"id": "mpost", "ext": ".mp", "steps": [["mpost", "-interaction=nonstopmode", "{src}"], ["mptopdf", "{glob:{stem}.[0-9]*}"]], "outputs": ["{stem}-*.pdf"], "crop": "none"}`.
+  - **종류 더하기·바꾸기**: 환경설정 `컴파일·도구` 탭의 `조각 그림 종류`에 JSON 목록을 적는다. 같은 `id`(`plain` `asy` `lilypond` `musixtex` `pmx` `mtx` `mpost`)는 적은 키만 덮어쓰고(예: `[{"id": "asy", "engines": ["pdflatex"]}]`), 새 `id`는 `ext`(점 포함)와 `steps`(명령 목록의 목록)가 있어야 한다. 키: `label`, `ext`, `comment`(주석 기호), `engines`, `steps`, `outputs`(결과 PDF 이름 패턴), `crop`(`ink`|`none`), `template`, `timeout`(초), `inject`. 명령에는 `{src}` `{stem}` `{engine}`, `{inc:-I}`(검색 폴더마다 `-I 폴더`로 펼침), `{glob:패턴}`(작업 폴더에서 찾은 파일들로 펼침)을 쓴다. 새로 여는 조각 그림 창부터 적용된다. 예(내장 MetaPost 정의): `{"id": "mpost", "ext": ".mp", "steps": [["mpost", "-interaction=nonstopmode", "{src}"], ["mptopdf", "{glob:{stem}.[0-9]*}"]], "outputs": ["{stem}-*.pdf"], "crop": "none"}`.
   - **내장 명령은 이렇게 돈다**: plain TeX `<엔진> -interaction=nonstopmode -halt-on-error -no-shell-escape`, Asymptote `asy -f pdf -noV -tex <엔진>`, LilyPond `lilypond --pdf -I …`, musixtex·PMX·M-Tx `musixtex -F "pdftex --interaction=nonstopmode" -p 소스`(0.8.1, 사용자 확인값), MetaPost `mpost` 다음 `mptopdf`. **실제 도구로 확인한 것은 plain TeX뿐이다**(musixtex 명령은 사용자가 알려 준 형태이고, 나머지는 명령 구성과 흐름만 시험했다). 명령 옵션이 설치된 버전과 안 맞으면 위 JSON으로 고친다.
+  - **실행 후 자르기**(0.9.3). 창의 `실행 후 자르기` 체크(LaTeX가 아닌 종류에만 보인다)를 켜면 도구가 낸 PDF를 쪽마다 그림이 있는 영역만 남기고 잘라 낱장 그림으로 만든다. 기본값은 종류마다 다르다 — 전체 용지를 내는 plain TeX·LilyPond·musixtex·PMX·M-Tx는 켜짐, 이미 잘라 내는 Asymptote·MetaPost는 꺼짐. 종류별로 마지막 선택을 기억하고, 만든 그림의 소스 머리에 `crop: yes/no`로 적어 두어 다시 열면 그대로다. 자르는 방법은 `pdfcrop`이 아니라 **내장 방식** 하나다: PDF를 래스터로 그려 잉크가 있는 상자를 재고, TeX의 `\includegraphics[page=…, trim=…, clip]`로 자른다. Ghostscript·perl이 필요 없고(Windows에서도 같다) 그림은 **벡터 그대로**이며 쪽마다 따로 저장된다(pdfcrop은 여러 쪽을 한 파일에 둔 채 자른다). 바깥에 2bp 여백을 남긴다. 끄면 도구가 낸 PDF를 그대로(여러 쪽이면 한 파일로) 저장한다. 흰색으로 칠한 배경처럼 "안 보이는 것"은 영역으로 치지 않는다. LilyPond의 `-dcrop`은 버전에 따라 결과 이름·지원이 달라 쓰지 않았다.
+  - **LilyPond 꼬리말 자동 제거**(0.9.4). LilyPond가 쪽 맨 아래에 찍는 "Music engraving by LilyPond …" 꼬리말이 그림에 섞이지 않도록, 컴파일할 때 소스에 `\header { tagline = "" }`를 **끼워서** 돌린다(`\version` 줄이 있으면 그 바로 뒤, 없으면 맨 앞). 소스에 `tagline`이라는 낱말이 이미 있으면 끼우지 않는다 — 직접 쓴 꼬리말은 그대로 둔다. **저장하는 `.ly`는 바뀌지 않는다**(끼운 줄은 컴파일용 사본에만 있다). 컴파일 오류의 줄 번호는 표지 줄(몇 줄)과 끼운 줄 때문에 소스보다 조금 크게 나온다. 같은 기능은 종류 JSON의 `inject`(`{"text": …, "unless": 정규식, "after": 정규식}`)로 다른 종류에도, 끄려면 `"inject": null`로 줄 수 있다.
 - 컴파일: `엔진 -interaction=nonstopmode -halt-on-error -no-shell-escape`, 60초 제한. `\includegraphics` `\input`이 작업공간 파일을 찾도록 그림 폴더들과 작업공간 루트가 검색 경로에 얹힌다. 오류가 나면 로그 발췌(첫 `!`부터 14줄)가 아래에 나온다.
 - `article`/`oblivoir`로 여러 쪽이 나오면 쪽마다 잉크 영역만 벡터로 잘라 낱장 PDF로 만든다(래스터 측정에 QtPdf 또는 pdftoppm이 필요하다).
 - `저장하고 삽입`: 이름 검사 → 같은 이름이 있으면 덮어쓸지 확인 → 마지막 컴파일 이후 내용이 바뀌었으면 먼저 컴파일 → PDF와 `.tex` 저장 → 원고의 커서 자리에 `![""](이름.pdf)` 삽입(여러 쪽이면 빈 줄로 구분하여 쪽마다 한 문단). 마지막으로 쓴 프리앰블·엔진·클래스는 다음에 기본값이 된다. 그림 크기·정렬은 원고에서 `{width=…}` 속성으로 준다.
