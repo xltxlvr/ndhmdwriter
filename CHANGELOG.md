@@ -3,6 +3,13 @@
 버전은 `__version__` 하나로 관리한다(파일 맨 위). 수정이 있을 때마다
 마지막 자리(patch)를 하나씩 올린다. 최신 항목이 위에 온다.
 
+## 0.9.8
+- 도움말 메뉴: `Reference Manual` → `Reference Manual (pdf)`, 웹판 `Reference Manual (web)` 추가. ndhmarkdown 아래 `사양서 (pdf)`와 `사양서 (web)` 추가(기본 브라우저로 연다).
+
+## 0.9.7
+- AI 도우미: 지시문별 `웹 검색 허용` 칸 추가. 켜면 `{도구} 인자(웹 검색 허용)`로 실행하고 프롬프트 꼬리도 웹 검색 허용으로 바뀐다. claude는 WebSearch·WebFetch만 허용(명령 실행·편집은 막힘). 기본 지시문 `자료 보충`만 켜짐.
+- 시험: 인자 조립·설정창 칸 동작은 확인. 실제 claude/codex/agy 웹 검색 실행은 미확인(codex `--search`, agy는 특히 불확실).
+
 ## 0.9.6
 - 외부 도구에 스크립트 등록: `python3 what.py`, `texlua x.lua`, 또는 `what.py` 만으로도 등록 가능. 스크립트는 `추가 검색 폴더`에서 찾아 전체 경로로 실행한다.
 - `python3`/`python`/`py -3` 상호 대체(Windows·맥 차이). 확인 창에 실행 파일·스크립트 경로 표시, `--help`는 인터프리터로 실행.

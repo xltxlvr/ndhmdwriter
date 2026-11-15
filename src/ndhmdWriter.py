@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.9.6"
+__version__ = "0.9.8"
 
 from contextlib import contextmanager
 
@@ -16334,6 +16334,15 @@ AI_DEFAULT_ARGS = {
     # 선택한 글은 표준 입력으로 가서 <stdin> 블록으로 덧붙는다. 답은 표준 출력으로 나온다(확인 필요).
     "codex": "exec --skip-git-repo-check --ephemeral -s read-only --color never {프롬프트}",
 }
+#: 지시문에 '웹 검색 허용'을 켰을 때 쓰는 인자. claude 는 --tools/--allowedTools 로 WebSearch·WebFetch 둘만 열어 둔다(명령 실행·파일 편집은 계속 막힘).
+#: codex 의 --search 와 agy 는 확인하지 못했다(agy 는 기본 인자 그대로).
+AI_WEB_ARGS = {
+    "claude": '-p {프롬프트} --tools "WebSearch,WebFetch" --allowedTools "WebSearch,WebFetch" --no-session-persistence --setting-sources "" --output-format text',
+    "agy": AI_DEFAULT_ARGS["agy"],
+    "codex": "--search exec --skip-git-repo-check --ephemeral -s read-only --color never {프롬프트}",
+}
+AI_WEB_NOTE = ("웹 검색·웹 가져오기만 쓸 수 있다(명령 실행·파일 열기·편집은 안 된다). 사실 확인이나 자료가 필요할 때만 찾아보고, "
+               "출처가 있으면 짧게 밝힌다.")
 AI_NO_TOOLS = ("명령 실행·파일 열기·웹 검색 같은 도구는 쓸 수 없다(쓰려 하면 거부되어 답이 비게 된다). "
                "도구를 쓰지 말고 지금 알고 있는 지식만으로 곧바로 답한다.")
 AI_REPLACE_SUFFIX = (
@@ -16353,7 +16362,7 @@ AI_DEFAULT_PROMPTS = [
      "prompt": "표준 입력의 글에 감각적 묘사를 조금 더하라. 사실이나 사건을 새로 지어내지 않는다."},
     {"name": "조언 (문제점과 개선 제안)", "mode": AI_ADVICE,
      "prompt": "표준 입력의 글을 읽고 문장·구성·어조의 문제점과 구체적인 개선 제안을 말해 줘라."},
-    {"name": "자료 보충 (확인할 사실)", "mode": AI_ADVICE,
+    {"name": "자료 보충 (확인할 사실)", "mode": AI_ADVICE, "web": True,
      "prompt": "표준 입력의 글에 나오는 사실·용어·배경 가운데 보충하거나 확인할 만한 것을 짚고, 찾아볼 방향을 제안해 줘라."},
 ]
 
@@ -16376,6 +16385,11 @@ def find_ai_tool(name: str, configured: str = "") -> str:
         return configured if os.path.isfile(configured) else ""
     path = os.pathsep.join([os.environ.get("PATH", "")] + _ai_extra_dirs())
     return shutil.which(name, path=path) or ""
+
+
+def ai_suffix(mode: str, web: bool = False) -> str:
+    base = AI_REPLACE_SUFFIX if mode == AI_REPLACE else AI_ADVICE_SUFFIX
+    return base.replace(AI_NO_TOOLS, AI_WEB_NOTE) if web else base
 
 
 def ai_build_command(exe: str, args_template: str, prompt: str, text: str = ""):
@@ -16587,10 +16601,12 @@ class AiResultDialog(QDialog):
             self._set_busy(False)
             self.btn_retry.setEnabled(True)
             return
-        suffix = AI_REPLACE_SUFFIX if self._mode == AI_REPLACE else AI_ADVICE_SUFFIX
+        web = bool(self._item.get("web"))
+        suffix = ai_suffix(self._mode, web)
         prompt = self._item.get("prompt", "").strip() + suffix
         try:
-            program, args, use_stdin = ai_build_command(exe, cfg[f"{tool}_args"], prompt, self._plain)
+            program, args, use_stdin = ai_build_command(exe, cfg[f"{tool}_web_args"] if web else cfg[f"{tool}_args"],
+                                                       prompt, self._plain)
         except ValueError as e:
             self.status.setText(str(e))
             self._set_busy(False)
@@ -17308,7 +17324,7 @@ class AiSettingsDialog(QDialog):
         self.tool.setCurrentText(cfg["tool"])
         form = QFormLayout()
         form.addRow("사용할 도구", self.tool)
-        self.path, self.args, self.found = {}, {}, {}
+        self.path, self.args, self.found, self.web_args = {}, {}, {}, {}
         for t in AI_TOOLS:
             pe = QLineEdit(cfg[f"{t}_path"])
             pe.setPlaceholderText("비워 두면 PATH 와 흔한 설치 위치에서 찾습니다")
@@ -17320,6 +17336,9 @@ class AiSettingsDialog(QDialog):
             form.addRow(f"{t} 경로", pe)
             form.addRow("", fl)
             form.addRow(f"{t} 인자", ae)
+            we = QLineEdit(cfg[f"{t}_web_args"])
+            self.web_args[t] = we
+            form.addRow(f"{t} 인자(웹 검색 허용)", we)
         hint = QLabel("인자에서 {프롬프트} 는 지시문으로 바뀌고, 선택한 글은 표준 입력으로 갑니다. 모델을 고르려면 인자에 "
                       "--model(claude·agy) 또는 -m(codex) 을 덧붙이세요. 인자에 {선택} 이 있으면 선택한 글을 표준 입력 대신 그 자리에 "
                       "넣습니다(agy 기본). agy 의 읽기 전용 옵션은 확인하지 못했습니다.")
@@ -17335,11 +17354,13 @@ class AiSettingsDialog(QDialog):
         self.mode = QComboBox()
         self.mode.addItem("교체 제안 (결과가 글을 대신함)", AI_REPLACE)
         self.mode.addItem("조언 (참고용 답)", AI_ADVICE)
+        self.web = QCheckBox("웹 검색 허용 (검색·웹 가져오기만, 확인 없이)")
         self.prompt = QPlainTextEdit()
         self.prompt.setPlaceholderText("지시문. 선택한 글은 따로 붙으므로 '표준 입력의 글을 …' 처럼 쓰세요.")
         for w in (self.name,):
             w.textEdited.connect(self._store)
         self.mode.currentIndexChanged.connect(self._store)
+        self.web.toggled.connect(self._store)
         self.prompt.textChanged.connect(self._store)
         btns = QHBoxLayout()
         for label, fn in (("추가", self._add), ("삭제", self._del), ("위로", lambda: self._move(-1)),
@@ -17353,6 +17374,7 @@ class AiSettingsDialog(QDialog):
         right = QFormLayout()
         right.addRow("이름", self.name)
         right.addRow("방식", self.mode)
+        right.addRow("", self.web)
         right.addRow("지시문", self.prompt)
         row = QHBoxLayout()
         row.addLayout(left, 1)
@@ -17391,19 +17413,21 @@ class AiSettingsDialog(QDialog):
     def _on_row(self, row):
         self._cur = row
         on = 0 <= row < len(self._items)
-        for w in (self.name, self.mode, self.prompt):
+        for w in (self.name, self.mode, self.prompt, self.web):
             w.setEnabled(on)
-        for w in (self.name, self.mode, self.prompt):
+        for w in (self.name, self.mode, self.prompt, self.web):
             w.blockSignals(True)
         if on:
             it = self._items[row]
             self.name.setText(it["name"])
             self.mode.setCurrentIndex(max(0, self.mode.findData(it["mode"])))
             self.prompt.setPlainText(it["prompt"])
+            self.web.setChecked(bool(it.get("web")))
         else:
             self.name.clear()
             self.prompt.clear()
-        for w in (self.name, self.mode, self.prompt):
+            self.web.setChecked(False)
+        for w in (self.name, self.mode, self.prompt, self.web):
             w.blockSignals(False)
 
     def _store(self, *_):
@@ -17413,6 +17437,7 @@ class AiSettingsDialog(QDialog):
         it["name"] = self.name.text() or "(이름 없음)"
         it["mode"] = self.mode.currentData()
         it["prompt"] = self.prompt.toPlainText()
+        it["web"] = self.web.isChecked()
         self.listw.item(self._cur).setText(it["name"])
 
     def _add(self):
@@ -17438,13 +17463,14 @@ class AiSettingsDialog(QDialog):
 
     def _save(self):
         for t in AI_TOOLS:
-            if "{프롬프트}" not in self.args[t].text():
-                QMessageBox.warning(self, "인자", f"{t} 인자에 {{프롬프트}} 가 있어야 합니다.")
+            if "{프롬프트}" not in self.args[t].text() or "{프롬프트}" not in self.web_args[t].text():
+                QMessageBox.warning(self, "인자", f"{t} 인자(웹 검색 허용 포함)에 {{프롬프트}} 가 있어야 합니다.")
                 return
         self._win.ai_save_config(
             {"tool": self.tool.currentText(), "timeout": self.timeout.value(),
              **{f"{t}_path": self.path[t].text().strip() for t in AI_TOOLS},
-             **{f"{t}_args": self.args[t].text().strip() for t in AI_TOOLS}},
+             **{f"{t}_args": self.args[t].text().strip() for t in AI_TOOLS},
+             **{f"{t}_web_args": self.web_args[t].text().strip() for t in AI_TOOLS}},
             self._items)
         self.accept()
 
@@ -17499,6 +17525,10 @@ class SlotDialog(QDialog):
             QMessageBox.warning(self, "약어 슬롯", f"저장하지 못한 슬롯: {', '.join(failed)}")
             return
         self.accept()
+
+
+DOC_URL_MANUAL = "https://xltxlvr.github.io/ndhmdsuite/docs/ndhmdwriter-manual.html"
+DOC_URL_GUIDE = "https://xltxlvr.github.io/ndhmdsuite/docs/ndhmd4tex-dialect-guide.html"
 
 
 class MainWindow(QMainWindow):
@@ -17953,10 +17983,14 @@ class MainWindow(QMainWindow):
 
         m = self.menuBar().addMenu("도움말(&H)")
         act(m, "ndhmdWriter 정보 / 단축키(&H)", "F1", self.open_help)
-        act(m, "Reference Manual(&R)", None, lambda: self.open_guide("manual"))
+        act(m, "Reference Manual (pdf)(&R)", None, lambda: self.open_guide("manual"))
+        act(m, "Reference Manual (web)(&W)", None,
+            lambda: QDesktopServices.openUrl(QUrl(DOC_URL_MANUAL)))
         m.addSeparator()
         guide_menu = m.addMenu("ndhmarkdown")
-        act(guide_menu, "사양서(&S)", None, lambda: self.open_guide("guide"))
+        act(guide_menu, "사양서 (pdf)(&S)", None, lambda: self.open_guide("guide"))
+        act(guide_menu, "사양서 (web)(&E)", None,
+            lambda: QDesktopServices.openUrl(QUrl(DOC_URL_GUIDE)))
         act(guide_menu, "치트시트(&C)", None, lambda: self.open_guide("cheatsheet"))
 
     def set_ui_language(self, code: str):
@@ -23192,6 +23226,7 @@ class MainWindow(QMainWindow):
         for t in AI_TOOLS:
             cfg[f"{t}_path"] = str(st.value(f"ai/{t}_path", "") or "")
             cfg[f"{t}_args"] = str(st.value(f"ai/{t}_args", "") or "") or AI_DEFAULT_ARGS[t]
+            cfg[f"{t}_web_args"] = str(st.value(f"ai/{t}_web_args", "") or "") or AI_WEB_ARGS[t]
         return cfg
 
     def ai_prompts(self) -> list:
@@ -23203,7 +23238,7 @@ class MainWindow(QMainWindow):
         if not isinstance(items, list) or not items:
             return [dict(x) for x in AI_DEFAULT_PROMPTS]
         return [{"name": str(x.get("name", "")), "mode": x.get("mode", AI_REPLACE),
-                 "prompt": str(x.get("prompt", ""))} for x in items if isinstance(x, dict)]
+                 "prompt": str(x.get("prompt", "")), "web": bool(x.get("web", False))} for x in items if isinstance(x, dict)]
 
     def ai_save_config(self, cfg: dict, items: list):
         st = self._settings
@@ -24920,6 +24955,8 @@ _EN = {
     '도움말(&H)': 'Help(&H)',
     'ndhmdWriter 정보 / 단축키(&H)': 'About ndhmdWriter / Shortcuts(&H)',
     '사양서(&S)': 'Specification(&S)',
+    '사양서 (pdf)(&S)': 'Specification (pdf)(&S)',
+    '사양서 (web)(&E)': 'Specification (web)(&E)',
     '치트시트(&C)': 'Cheat sheet(&C)',
     '작업공간 폴더 선택': 'Select workspace folder',
     '작업공간: {}  (원고 {}개)': 'Workspace: {0}  ({1} manuscripts)',
