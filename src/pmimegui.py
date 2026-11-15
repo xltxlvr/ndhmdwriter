@@ -1,7 +1,9 @@
 # pmIME-Multilingual Engine
 #
 # (C) 2026 Nova de Hi
-# GPLv3
+# MIT
+# 'pm IME GUI'는 PyQt6 앱이라서 GPL이었다. 새로 PySide6로 옮겼고
+# 라이선스를 MIT로 바꾼다.
 #
 # version 0.13.2 (2026-10-22), 사전 저장을 pmime_core.add_custom_word 로 일원화
 # version 0.13.1 (2026-10-21), 변환 코어를 pmime_core.py 로 분리

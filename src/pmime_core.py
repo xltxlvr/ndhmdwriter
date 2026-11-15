@@ -1,7 +1,10 @@
 # pmIME-Multilingual Engine — core (Qt 비의존 변환 엔진)
 #
 # (C) 2026 Nova de Hi
-# GPLv3
+# MIT
+#
+# 'pm IME GUI'는 PyQt6 앱이라서 GPL이었다. 새로 PySide6로 옮겼고
+# 라이선스를 MIT로 바꾼다.
 #
 # pmimegui.py(PyQt6 단독 앱)와 ndhmdWriter.py(PySide6 보조 입력기)가 함께 쓰는 코어.
 # 변환 규칙·사전은 오직 여기서만 고친다. GUI/클립보드 코드는 이 파일에 없다.
