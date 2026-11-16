@@ -1,6 +1,6 @@
 ---
 title: ndhmdWriter 사용자 설명서 (참조편) — 초고
-author: ndhmdWriter 0.9.10 기준
+author: ndhmdWriter 0.10.0 기준
 toplevel: chapter
 setup: [articlelike.nmd,defaultnoto.nmd]
 classoption+: chapter
@@ -29,7 +29,7 @@ compileoption: --missingchar
 
 # 이 설명서에 대하여 {#ch:about}
 
-이 설명서는 ***ndhmdWriter*** 버전 0.9.10의 **참조편**이다. 처음 쓰는 사람을 안내하는 글이 아니라, 앱이 가진 기능을 메뉴 순서와 화면 구성에 맞추어 빠짐없이 적은 사전이다. "왜 이렇게 만들었는가"는 별도의 안내문(*무엇을 위해 만들었는가*)이 다루고, 이 글은 "무엇이 어떻게 동작하는가"만 적는다.
+이 설명서는 ***ndhmdWriter*** 버전 0.10.0의 **참조편**이다. 처음 쓰는 사람을 안내하는 글이 아니라, 앱이 가진 기능을 메뉴 순서와 화면 구성에 맞추어 빠짐없이 적은 사전이다. "왜 이렇게 만들었는가"는 별도의 안내문(*무엇을 위해 만들었는가*)이 다루고, 이 글은 "무엇이 어떻게 동작하는가"만 적는다.
 
 ## 표기 약속 {#sec:notation}
 
@@ -1466,6 +1466,7 @@ ndhmd4tex 0.22부터 원고에 ` ```external tool=도구이름, caption=…, lab
 - **오류와 알림.** 실패하면(`오류: …`) 콘솔 창에 그대로 보인다. 성공해도 `경고:`·`알림:`(예: raw LaTeX 블록 생략)이 있으면 콘솔 창으로 알린다. 마크업 점검처럼 줄로 이동하는 목록은 없다.
 - 기본 MathJax는 CDN 주소라 **오프라인**에서는 수식이 보이지 않는다(`--no-mathjax` 또는 `--mathjax URL`).
 - 주석 안의 `{{}}`는 포함이 아니며 ndhmd4tex와 같다. `tex` 펜스·`tabular`는 HTML에서 생략된다.
+- **문헌 목록(`--bibharvest`).** front matter에 `bibliography:`가 있고 `.bbl`이 biber 형식이면, ndhmd2html은 `bbl2bibitem.lua`가 만든 `<이름>-thebib.tex`를 읽어 목록을 만든다. 이 파일이 없거나 `.bbl`보다 오래되면 변환 경고에 그 사실이 나오는데, 앱은 변환이 끝난 뒤 `문헌 목록 준비` 창으로 **`--bibharvest`를 주고 다시 변환할지** 묻는다(`준비하고 다시 변환`/`그대로 두기`). 이는 texlua로 스크립트를 돌리며 이전 컴파일이 만든 `<이름>.tex`가 있어야 한다. 옵션 칸에 `--bibharvest`를 직접 적어 두면 묻지 않는다. 환경설정의 `HTML 변환 때마다 biber 문헌 목록을 새로 준비`를 켜면 늘 주지만 변환마다 다시 만들므로 느릴 수 있다. 시험은 가짜 ndhmd2html로 묻기·다시 변환·직접 적은 경우·환경설정 동작만 했고, 실제 `bbl2bibitem.lua` 실행은 확인하지 못했다.
 
 ## 작업공간 청소 {#sec:clean}
 

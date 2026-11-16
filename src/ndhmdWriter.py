@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.9.10"
+__version__ = "0.10.0"
 
 from contextlib import contextmanager
 
@@ -6391,6 +6391,10 @@ class Prefs:
         """```external 블록의 외부 도구 실행(--external)을 묻지 않고 늘 허용할지. 기본은 끔."""
         return self.s.value("prefs/external_always", False, type=bool)
 
+    def bibharvest_always(self) -> bool:
+        """HTML 변환에 늘 `--bibharvest`(biber 문헌 목록 준비)를 줄지. 기본은 끔 — 필요할 때 묻는다."""
+        return self.s.value("prefs/bibharvest_always", False, type=bool)
+
     def jigsaw_kind(self) -> str:
         """조각 그림 도구에서 마지막으로 고른 종류."""
         return self.s.value("prefs/jigsaw_kind", "latex", type=str)
@@ -6900,6 +6904,14 @@ class PreferencesDialog(QDialog):
             "남의 원고를 열 때도 명령이 돌 수 있으므로, 내 원고만 다룰 때에만 켜세요.")
         form.addRow("외부 도구 블록", self.external_always)
 
+        self.bibharvest_always = QCheckBox("HTML 변환 때마다 biber 문헌 목록을 새로 준비 (--bibharvest)")
+        self.bibharvest_always.setChecked(self.prefs.bibharvest_always())
+        self.bibharvest_always.setToolTip(
+            "front matter 에 bibliography: 가 있고 .bbl 이 biber 형식이면 ndhmd2html 은 bbl2bibitem.lua(texlua)로\n"
+            "<이름>-thebib.tex 를 만들어야 목록을 씁니다. 기본은 그 목록이 없거나 낡았을 때 변환 뒤에 한 번 묻습니다.\n"
+            "켜면 변환할 때마다 다시 만들므로 느릴 수 있습니다(이전 컴파일이 만든 .tex 와 texlua 가 필요).")
+        form.addRow("문헌 목록(HTML)", self.bibharvest_always)
+
         self.jig_kinds = QPlainTextEdit(self.prefs.jigsaw_kinds_json())
         self.jig_kinds.setFixedHeight(96)
         self.jig_kinds.setTabChangesFocus(True)
@@ -7049,6 +7061,7 @@ class PreferencesDialog(QDialog):
             extra_path=self.extra_path.toPlainText().strip(),
             jigsaw_kinds=self.jig_kinds.toPlainText().strip(),
             external_always=self.external_always.isChecked(),
+            bibharvest_always=self.bibharvest_always.isChecked(),
         )
         JigsawFigure.use_kinds(jigsaw_kinds(self.jig_kinds.toPlainText()))
         apply_extra_path(self.extra_path.toPlainText())
@@ -20897,6 +20910,33 @@ class MainWindow(QMainWindow):
             return ["--external"]
         return []
 
+    #: ndhmd2html 이 biber 형식 .bbl 의 문헌 목록을 못 만들었거나(thebib.tex 없음) 낡았다고 알릴 때의 문구.
+    _BIBHARVEST_NEEDED_RE = re.compile(r"biber 형식이라 바로 읽을 수 없습니다|-thebib\.tex 이\(가\).*오래됐습니다")
+
+    def bibharvest_args(self, force: bool = False) -> list:
+        if force or self.prefs.bibharvest_always():
+            return ["--bibharvest"]
+        return []
+
+    def offer_bibharvest(self, raw: str, args: list, retry) -> bool:
+        """HTML 변환이 "biber 문헌 목록을 먼저 준비해야 한다"고 알렸으면 --bibharvest 로 다시 돌릴지 묻는다.
+        물어봤으면 True. 이미 --bibharvest 로 돌렸거나 옵션에 직접 적었으면 묻지 않는다(되풀이 방지)."""
+        if "--bibharvest" in args or self.prefs.bibharvest_always() or not self._BIBHARVEST_NEEDED_RE.search(raw):
+            return False
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("문헌 목록 준비")
+        box.setText("문헌 목록이 비었거나 낡았습니다. biber 형식 .bbl 을 HTML 용 목록(<이름>-thebib.tex)으로 바꿔 다시 변환할까요?")
+        box.setInformativeText(
+            "bbl2bibitem.lua 를 texlua 로 돌립니다. 이전 컴파일(PDF)이 만든 <이름>.tex 와 texlua·lualatex 가 있어야 하며 "
+            "시간이 좀 걸릴 수 있습니다. 새로 컴파일했다면 .bbl 보다 오래된 목록은 다시 만들어야 합니다.")
+        run_btn = box.addButton("준비하고 다시 변환", QMessageBox.AcceptRole)
+        box.addButton("그대로 두기", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is run_btn:
+            retry()
+        return True
+
     def offer_external(self, raw: str, retry) -> bool:
         """변환이 "--external 이 필요하다"며 실패했으면 실행해도 되는지 묻고, 허용하면 retry(True)를 부른다.
         물어봤으면(허용이든 아니든) True, 이 실패와 상관없으면 False.
@@ -20986,8 +21026,10 @@ class MainWindow(QMainWindow):
             return
         self._start_html(target, args, open_after)
 
-    def _start_html(self, target: Path, args: list, open_after: bool, external: bool = False):
-        cmd = self.html_tool.command([*args, *self.external_args(external), str(target)])
+    def _start_html(self, target: Path, args: list, open_after: bool, external: bool = False,
+                    harvest: bool = False):
+        cmd = self.html_tool.command([*args, *self.external_args(external), *self.bibharvest_args(harvest),
+                                      str(target)])
         if cmd is None:
             return
         out = html_output_path(target, args)
@@ -20996,8 +21038,8 @@ class MainWindow(QMainWindow):
         proc.setWorkingDirectory(str(target.parent))
         proc.setProcessChannelMode(QProcess.MergedChannels)
         proc.finished.connect(
-            lambda code, stt, p=proc, o=out, oa=open_after, t=target, a=list(args):
-            self._html_finished(p, o, oa, t, a))
+            lambda code, stt, p=proc, o=out, oa=open_after, t=target, a=list(args), ex=external:
+            self._html_finished(p, o, oa, t, a, ex))
         proc.errorOccurred.connect(lambda e, p=proc: self._html_failed(p))
         self._html_proc = proc
         proc.start(cmd[0], cmd[1:])
@@ -21008,7 +21050,8 @@ class MainWindow(QMainWindow):
         self._html_proc = None
         QMessageBox.warning(self, "실행 실패", "ndhmd2html 를 실행하지 못했습니다.")
 
-    def _html_finished(self, proc, out: Path, open_after: bool, target: Path = None, args: list = None):
+    def _html_finished(self, proc, out: Path, open_after: bool, target: Path = None, args: list = None,
+                       external: bool = False):
         if proc is not self._html_proc:
             return
         self._html_proc = None
@@ -21019,6 +21062,10 @@ class MainWindow(QMainWindow):
         if proc.exitCode() != 0 or not out.exists():
             ConsoleOutputDialog(self, "HTML 변환 실패", raw or "출력이 없습니다.").show()
             self.statusBar().showMessage("HTML 변환 실패", 5000)
+            return
+        if target is not None and self.offer_bibharvest(
+                raw, args or [], lambda t=target, a=args, oa=open_after, ex=external:
+                self._start_html(t, a, oa, ex, True)):
             return
         self._last_html = out
         self.statusBar().showMessage(f"HTML 변환 완료 — {out.name}", 8000)
