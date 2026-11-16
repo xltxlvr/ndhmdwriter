@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.9.8"
+__version__ = "0.9.10"
 
 from contextlib import contextmanager
 
@@ -122,6 +122,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStatusBar,
     QTabWidget,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -17311,7 +17312,7 @@ class AiSettingsDialog(QDialog):
         super().__init__(window)
         self._win = window
         self.setWindowTitle("AI 도우미 설정 (실험)")
-        self.resize(760, 640)
+        self.resize(700, 560)
         cfg = window.ai_config()
         self._items = [dict(x) for x in window.ai_prompts()]
         self._cur = -1
@@ -17319,35 +17320,65 @@ class AiSettingsDialog(QDialog):
             "실험 기능입니다. 선택한 글이 <b>설치된 명령행 도구를 통해 외부 AI 서비스로 전송</b>됩니다. 공개 전 원고라면 "
             "서비스의 약관과 데이터 사용 방식을 확인하고 쓰세요. 도구는 원고와 무관한 빈 임시 폴더에서 실행됩니다.")
         warn.setWordWrap(True)
+        # ── 도구 탭: 도구를 고르면 그 도구의 설정만 아래에 나온다(캐스케이드) ──
         self.tool = QComboBox()
         self.tool.addItems(AI_TOOLS)
         self.tool.setCurrentText(cfg["tool"])
-        form = QFormLayout()
-        form.addRow("사용할 도구", self.tool)
         self.path, self.args, self.found, self.web_args = {}, {}, {}, {}
+        self.stack = QStackedWidget()
+        self.adv = {}
         for t in AI_TOOLS:
             pe = QLineEdit(cfg[f"{t}_path"])
             pe.setPlaceholderText("비워 두면 PATH 와 흔한 설치 위치에서 찾습니다")
             ae = QLineEdit(cfg[f"{t}_args"])
+            ae.setToolTip("{프롬프트} 는 지시문으로 바뀌고 선택한 글은 표준 입력으로 갑니다. {선택} 이 있으면 글을 그 자리에 넣습니다.")
+            we = QLineEdit(cfg[f"{t}_web_args"])
+            we.setToolTip("'웹 검색 허용'을 켠 지시문에서만 쓰입니다. 권한을 더 열면 위험할 수 있습니다(설명서 AI 도우미 절).")
             fl = QLabel()
             fl.setWordWrap(True)
-            self.path[t], self.args[t], self.found[t] = pe, ae, fl
+            self.path[t], self.args[t], self.web_args[t], self.found[t] = pe, ae, we, fl
             pe.textChanged.connect(self._refresh_found)
-            form.addRow(f"{t} 경로", pe)
-            form.addRow("", fl)
-            form.addRow(f"{t} 인자", ae)
-            we = QLineEdit(cfg[f"{t}_web_args"])
-            self.web_args[t] = we
-            form.addRow(f"{t} 인자(웹 검색 허용)", we)
-        hint = QLabel("인자에서 {프롬프트} 는 지시문으로 바뀌고, 선택한 글은 표준 입력으로 갑니다. 모델을 고르려면 인자에 "
-                      "--model(claude·agy) 또는 -m(codex) 을 덧붙이세요. 인자에 {선택} 이 있으면 선택한 글을 표준 입력 대신 그 자리에 "
-                      "넣습니다(agy 기본). agy 의 읽기 전용 옵션은 확인하지 못했습니다.")
+            page = QWidget()
+            pf = QFormLayout(page)
+            pf.setContentsMargins(0, 8, 0, 0)
+            pf.addRow("경로", pe)
+            pf.addRow("", fl)
+            adv_w = QWidget()
+            af = QFormLayout(adv_w)
+            af.setContentsMargins(0, 0, 0, 0)
+            af.addRow("인자", ae)
+            af.addRow("인자 (웹 검색 허용)", we)
+            adv_w.setVisible(False)
+            self.adv[t] = adv_w
+            tg = QToolButton()
+            tg.setText("고급: 인자 보기")
+            tg.setCheckable(True)
+            tg.setAutoRaise(True)
+            tg.toggled.connect(lambda on, w=adv_w, b=tg: (w.setVisible(on), b.setText("고급: 인자 숨기기" if on else "고급: 인자 보기")))
+            pf.addRow("", tg)
+            pf.addRow(adv_w)
+            self.stack.addWidget(page)
+        self.tool.currentIndexChanged.connect(self.stack.setCurrentIndex)
+        self.stack.setCurrentIndex(self.tool.currentIndex())
+        hint = QLabel("모델을 고르려면 인자에 --model(claude·agy) 또는 -m(codex)을 덧붙입니다. 인자의 뜻과 권한을 열 때의 "
+                      "위험은 설명서 'AI 도우미' 절을 보세요. agy 의 읽기 전용 옵션은 확인하지 못했습니다.")
         hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
         self.timeout = QSpinBox()
         self.timeout.setRange(10, 900)
         self.timeout.setSuffix(" 초")
         self.timeout.setValue(cfg["timeout"])
-        form.addRow("기다리는 한도", self.timeout)
+        tool_tab = QWidget()
+        tf = QFormLayout()
+        tf.addRow("사용할 도구", self.tool)
+        tl = QVBoxLayout(tool_tab)
+        tl.addLayout(tf)
+        tl.addWidget(self.stack)
+        tf2 = QFormLayout()
+        tf2.addRow("기다리는 한도", self.timeout)
+        tl.addLayout(tf2)
+        tl.addWidget(hint)
+        tl.addStretch(1)
         self.listw = QListWidget()
         self.listw.currentRowChanged.connect(self._on_row)
         self.name = QLineEdit()
@@ -17379,15 +17410,19 @@ class AiSettingsDialog(QDialog):
         row = QHBoxLayout()
         row.addLayout(left, 1)
         row.addLayout(right, 2)
+        prompt_tab = QWidget()
+        pl = QVBoxLayout(prompt_tab)
+        pl.addWidget(QLabel("지시문 목록 (편집창 우클릭 ▶ AI 도우미에 나타납니다)"))
+        pl.addLayout(row, 1)
+        tabs = QTabWidget()
+        tabs.addTab(tool_tab, "도구")
+        tabs.addTab(prompt_tab, "지시문")
         box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         box.accepted.connect(self._save)
         box.rejected.connect(self.reject)
         lay = QVBoxLayout(self)
         lay.addWidget(warn)
-        lay.addLayout(form)
-        lay.addWidget(hint)
-        lay.addWidget(QLabel("지시문 목록 (편집창 우클릭 ▶ AI 도우미에 나타납니다)"))
-        lay.addLayout(row, 1)
+        lay.addWidget(tabs, 1)
         lay.addWidget(box)
         self._reload_list(0)
         self._refresh_found()
@@ -17395,7 +17430,7 @@ class AiSettingsDialog(QDialog):
     def _refresh_found(self):
         for t in AI_TOOLS:
             exe = find_ai_tool(t, self.path[t].text().strip())
-            self.found[t].setText(f"찾음: {exe}" if exe else "찾지 못했습니다(설치되어 있지 않거나 경로가 다릅니다).")
+            self.found[t].setText(f"✓ 찾음: {exe}" if exe else "✗ 찾지 못했습니다(설치되어 있지 않거나 경로가 다릅니다).")
 
     def _reload_list(self, row):
         self.listw.blockSignals(True)
