@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.10.0"
+__version__ = "0.10.1"
 
 from contextlib import contextmanager
 
@@ -13694,9 +13694,9 @@ class NotePanel(QDialog):
 
 class CitationPanel(QDialog):
     """bib 인용 삽입. 비모달 — 작업공간의 .bib 파일들을 훑어 citekey(+있으면
-    제목)를 보여주고, 클릭하면 그 citekey 자체를 커서 위치에 꽂는다 —
-    `[@citekey]` 같은 ndhmd 자체 인용 문법이 있으니, LaTeX cite 명령으로 감싸는
-    것까지는 이 패널이 할 일이 아니다.
+    제목)를 보여주고, 항목을 고른 뒤 [citekey 삽입] 버튼(또는 더블클릭)을 누르면
+    `[@citekey]` 를 커서 위치에 꽂는다. LaTeX cite 명령으로 감싸는 것까지는
+    이 패널이 할 일이 아니다(0.10.1 전에는 클릭만으로 citekey 글자만 꽂았다).
 
     BibTeX 편집기를 새로 만들지 않는다 — JabRef 같은 전용 도구가 이미
     훨씬 낫다. 이건 "이 작업공간에 어떤 문헌이 있었더라"를 훑어보고
@@ -13721,7 +13721,7 @@ class CitationPanel(QDialog):
 
         self.hint = QLabel()
         self.hint.setWordWrap(True)
-        self.hint.setStyleSheet("color: palette(mid); font-size: 11px;")
+        self.hint.setStyleSheet(dim_label_css(self))      # palette(mid) 는 다크 모드에서 안 보인다
 
         #: .bib 하나에 수십~수백 개가 흔해서, 훑어보는 것만으로는 금방
         #: 못 쓰게 된다. citekey·제목·저자 어디에든 걸리면 보여준다.
@@ -13731,19 +13731,37 @@ class CitationPanel(QDialog):
         self.filter_edit.textChanged.connect(self._apply_filter)
 
         self.list = QListWidget()
-        self.list.itemClicked.connect(self._on_click)
+        self.list.itemDoubleClicked.connect(lambda _it: self._insert_current())
+        self.list.currentItemChanged.connect(lambda *_: self._sync_insert_btn())
 
+        self.insert_btn = QPushButton("citekey 삽입")
+        self.insert_btn.setToolTip("고른 항목을 [@citekey] 꼴로 커서 위치에 넣습니다 (더블클릭도 같습니다)")
+        self.insert_btn.setDefault(True)
+        self.insert_btn.clicked.connect(self._insert_current)
         refresh_btn = QPushButton("새로고침")
         refresh_btn.clicked.connect(self.refresh)
+        row = QHBoxLayout()
+        row.addWidget(refresh_btn)
+        row.addStretch(1)
+        row.addWidget(self.insert_btn)
 
         box = QVBoxLayout(self)
         box.addWidget(self.hint)
         box.addWidget(self.file_box)
         box.addWidget(self.filter_edit)
         box.addWidget(self.list, 1)
-        box.addWidget(refresh_btn)
+        box.addLayout(row)
 
         self.refresh()
+        self._sync_insert_btn()
+
+    def changeEvent(self, e):
+        if e.type() == QEvent.PaletteChange and hasattr(self, "hint"):
+            self.hint.setStyleSheet(dim_label_css(self))
+        super().changeEvent(e)
+
+    def _sync_insert_btn(self):
+        self.insert_btn.setEnabled(self.list.currentItem() is not None)
 
     def _bib_files(self) -> list:
         if not self._win.workspace:
@@ -13829,9 +13847,11 @@ class CitationPanel(QDialog):
         else:
             self.hint.setText(f"{plural}에서 문헌 {total}개")
 
-    def _on_click(self, item: QListWidgetItem):
-        key = item.data(Qt.UserRole)
-        self._win.editor.insertPlainText(key)
+    def _insert_current(self):
+        item = self.list.currentItem()
+        if item is None:
+            return
+        self._win.editor.insertPlainText(f"[@{item.data(Qt.UserRole)}]")
         self._win.activateWindow()
         self._win.editor.setFocus()
 
