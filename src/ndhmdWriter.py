@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.10.1"
+__version__ = "0.12.3"
 
 from contextlib import contextmanager
 
@@ -39,6 +39,7 @@ import re
 import textwrap
 import difflib
 import shlex
+import importlib.util
 import shutil
 import signal
 import subprocess
@@ -13856,6 +13857,406 @@ class CitationPanel(QDialog):
         self._win.editor.setFocus()
 
 
+# ===========================================================================
+# 문서 글꼴 — font.py(Writer 모드)를 밖에서 실행하고 결과를 front matter 의 글꼴 블록으로 쓴다
+# ===========================================================================
+#
+# 전역 글꼴 선언(\setmainfont · \setsansfont · \setmonofont 와 한글·한자 짝)만 다룬다.
+# 쪽 설정과 같은 틀이다: `preamble+: |` 끝의 관리 블록, 머리줄 주석에 다시 열 설정(JSON 한 줄).
+# font.py 는 Writer(.py 또는 .exe)와 같은 폴더에 둔다.
+
+FONT_MARK = "ndhmdWriter:font"
+FONT_OPEN = f"% >>> {FONT_MARK}"
+FONT_CLOSE = f"% <<< {FONT_MARK}"
+_FONT_CMD_RE = re.compile(r"\\(set(?:main|sans|mono)(?:hangul|hanja)?font)\b")
+_KOTEX_RE = re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{[^}]*\b(?:kotex|xetexko|luatexko)\b[^}]*\}")
+
+
+def _preamble_clean(preamble: str, mark_open: str, mark_close: str) -> str:
+    """우리 관리 블록과 TeX 주석을 뺀 preamble — 겹치는 선언을 찾을 때 쓴다."""
+    pre = re.sub(rf"{re.escape(mark_open)}.*?{re.escape(mark_close)}", "", str(preamble or ""), flags=re.S)
+    return re.sub(r"(?<!\\)%.*", "", pre)
+
+
+def font_wants_cjk(documentclass: str, preamble: str) -> bool:
+    """한글·한자 칸이 필요한가: oblivoir 이거나 kotex(·xetexko·luatexko)를 불러오는 문서."""
+    if str(documentclass or "").strip().lower() == "oblivoir":
+        return True
+    return bool(_KOTEX_RE.search(_preamble_clean(preamble, FONT_OPEN, FONT_CLOSE)))
+
+
+def font_conflicts(preamble: str) -> list:
+    """preamble 에 이미 있는 전역 글꼴 선언(우리 블록 밖)."""
+    pre = _preamble_clean(preamble, FONT_OPEN, FONT_CLOSE)
+    found = []
+    for m in _FONT_CMD_RE.finditer(pre):
+        c = "\\" + m.group(1)
+        if c not in found:
+            found.append(c)
+    return found
+
+
+def font_block_lines(tex: str, state: dict, scripts: str, engine: str, need_fontspec: bool) -> list:
+    """관리 블록의 줄들. 머리줄에는 다시 열 설정을 JSON 한 줄로 적는다."""
+    meta = json.dumps({"scripts": scripts, "engine": engine, "state": state},
+                      ensure_ascii=False, separators=(",", ":"))
+    body = ["% 자동 생성 — [설정 ▶ 문서 글꼴]으로 고치세요. 직접 고치면 다음 적용 때 덮어씁니다."]
+    if need_fontspec:
+        body.append(r"\IfPackageLoadedTF{fontspec}{}{\usepackage{fontspec}}")
+    body += tex.replace("\r\n", "\n").split("\n")
+    return [f"{FONT_OPEN}  {meta}", *body, FONT_CLOSE]
+
+
+def font_read_state(text: str):
+    """원고 안의 글꼴 블록 머리줄에서 {"scripts", "engine", "state"} 를 읽는다. 없거나 깨졌으면 None."""
+    m = re.search(rf"^[ \t]*{re.escape(FONT_OPEN)}[ \t]+(\{{.*\}})[ \t]*$", text, re.M)
+    if not m:
+        return None
+    try:
+        d = json.loads(m.group(1))
+    except ValueError:
+        return None
+    return d if isinstance(d, dict) and isinstance(d.get("state"), dict) else None
+
+
+def font_tool_dirs() -> list:
+    """font 도구를 찾을 폴더: Writer(.py 또는 .exe)와 같은 폴더. 맥 .app 이면 .app 이 있는 폴더,
+    .app 안의 Resources, 그리고 py2app -A(별칭 모드)일 때 원본 ndhmdWriter.py 가 있는 폴더도 본다."""
+    dirs = []
+
+    def add(d):
+        try:
+            d = Path(d).resolve()
+        except (OSError, RuntimeError):
+            return
+        if d not in dirs:
+            dirs.append(d)
+
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable).resolve()
+        add(exe.parent)
+        for par in exe.parents:                      # …/ndhmdWriter.app/Contents/MacOS/x
+            if par.suffix == ".app":
+                add(par.parent)
+                add(par / "Contents" / "Resources")
+                break
+        if os.environ.get("RESOURCEPATH"):           # py2app 이 지정하는 Resources 폴더
+            add(os.environ["RESOURCEPATH"])
+    try:
+        add(Path(__file__).resolve().parent)         # 별칭 모드·소스 실행: 원본 .py 가 있는 폴더
+    except NameError:
+        pass
+    return dirs
+
+
+def font_tool_find():
+    """(경로, 찾아본 폴더들). 같은 폴더의 font.exe → font → font.py 순."""
+    dirs = font_tool_dirs()
+    names = ("font.exe", "font", "font.py") if sys.platform == "win32" else ("font", "font.exe", "font.py")
+    for d in dirs:
+        for n in names:
+            f = d / n
+            if f.is_file() and (n.endswith((".py", ".exe")) or os.access(f, os.X_OK)):
+                return f, dirs
+    return None, dirs
+
+
+def font_tool_command(tool: Path, args: list):
+    """font 도구를 돌릴 명령. .py 는 파이썬으로 — Writer 가 묶음(exe)이면 그 안의 파이썬이 아니라
+    시스템에 설치된 파이썬(PySide6 가 있어야 한다)을 쓴다. 못 찾으면 ValueError."""
+    if tool.suffix.lower() != ".py":
+        return [str(tool), *args]
+    if getattr(sys, "frozen", False):
+        exe, pre = ext_tool_resolve("python3", "")
+        return [exe, *pre, str(tool), *args]
+    return [sys.executable, str(tool), *args]
+
+
+def book_dump_meta(win: "MainWindow", root: Path) -> dict:
+    """setup 까지 풀어 합친 메타(`ndhmd4tex --dump-meta`). 저장하지 않은 변경은 같은 폴더의 임시 복사본으로 본다."""
+    tmp = None
+    target = root
+    try:
+        if root == win._path and win.editor.document().isModified():
+            tmp = root.with_name(".~ndhmdWriter-page-tmp" + root.suffix)
+            tmp.write_text(win.editor.toPlainText(), encoding="utf-8")
+            target = tmp
+        cmd = win.tool.command(["--dump-meta", str(target)])
+        if cmd is None:
+            return {}
+        r = subprocess.run(cmd, cwd=str(root.parent), capture_output=True, timeout=30,
+                           creationflags=_NO_WINDOW)
+        return page_parse_dump_meta(decode_subprocess_output(r.stdout + r.stderr))
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+
+def page_parse_dump_meta(raw: str) -> dict:
+    """`ndhmd4tex --dump-meta` 출력(줄마다 `[ndhmd] ` 머리말이 붙은 YAML)을 사전으로."""
+    lines = []
+    for l in raw.splitlines():
+        if "end of meta" in l:
+            break
+        lines.append(strip_tool_prefix(l))
+    try:
+        import yaml
+        data = yaml.safe_load("\n".join(lines))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+class PageSetupDialog(QDialog):
+    """[설정 ▶ 쪽 설정]. 용지와 여백을 골라 책 최상위 원고의 front matter(`preamble+:`)에
+    관리 블록으로 써 넣는다. oblivoir·memoir 는 fapapersize, 그 밖의 클래스는 geometry."""
+
+    def __init__(self, window: "MainWindow"):
+        super().__init__(window)
+        self._win = window
+        self.setWindowTitle("쪽 설정")
+        self.resize(560, 560)
+        self._root = LabelIndex.book_files(window.index, window._path)[0]
+        self._meta = {}
+        self._build()
+        self._load()
+
+    # -- 화면 -----------------------------------------------------------------
+    def _build(self):
+        self.info = QLabel()
+        self.info.setWordWrap(True)
+
+        self.backend = QComboBox()
+        self.backend.addItem("자동", "auto")
+        self.backend.addItem("fapapersize", "fapapersize")
+        self.backend.addItem("geometry", "geometry")
+        self.paper = QComboBox()
+        for name, (w, h) in PAGE_PAPERS.items():
+            self.paper.addItem(f"{name}  ({w}×{h} mm)", name)
+        self.size = QComboBox()
+        self.one = QRadioButton("단면 (왼쪽·오른쪽)")
+        self.two = QRadioButton("양면 (안쪽·바깥쪽)")
+        self.two.setChecked(True)
+        side = QHBoxLayout()
+        side.addWidget(self.one)
+        side.addWidget(self.two)
+        side.addStretch(1)
+
+        self.m_inner, self.m_upper = QLineEdit(), QLineEdit()
+        self.m_outer, self.m_bottom = QLineEdit(), QLineEdit()
+        for e in (self.m_inner, self.m_upper, self.m_outer, self.m_bottom):
+            e.setPlaceholderText("20 또는 20mm")
+            e.setMaximumWidth(110)
+        self.l_inner, self.l_outer = QLabel(), QLabel()
+        self.same = QCheckBox("바깥쪽·아래쪽을 안쪽·위와 같게 (값 2개)")
+        grid = QGridLayout()
+        grid.addWidget(self.l_inner, 0, 0)
+        grid.addWidget(self.m_inner, 0, 1)
+        grid.addWidget(QLabel("위"), 0, 2)
+        grid.addWidget(self.m_upper, 0, 3)
+        grid.addWidget(self.l_outer, 1, 0)
+        grid.addWidget(self.m_outer, 1, 1)
+        grid.addWidget(QLabel("아래"), 1, 2)
+        grid.addWidget(self.m_bottom, 1, 3)
+        grid.setColumnStretch(4, 1)
+
+        form = QFormLayout()
+        form.addRow("방식", self.backend)
+        form.addRow("용지", self.paper)
+        form.addRow("글자 크기", self.size)
+        form.addRow("", side)
+        form.addRow("여백", grid)
+        form.addRow("", self.same)
+
+        self.preview = QPlainTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.preview.setMaximumHeight(140)
+        self.warn = QLabel()
+        self.warn.setWordWrap(True)
+        # 테마와 상관없이 읽히도록 글자색·바탕색을 함께 고정한다.
+        self.warn.setStyleSheet("background:#fff3cd; color:#000; padding:6px; border:1px solid #d9b44a;")
+        self.warn.setVisible(False)
+        self.note = QLabel()
+        self.note.setWordWrap(True)
+        self.note.setStyleSheet(dim_label_css(self))
+
+        self.apply_btn = QPushButton("적용")
+        self.apply_btn.setDefault(True)
+        self.apply_btn.clicked.connect(self._apply)
+        self.clear_btn = QPushButton("해제")
+        self.clear_btn.setToolTip("front matter 에서 이 대화창이 쓴 블록을 지웁니다.")
+        self.clear_btn.clicked.connect(self._clear)
+        close_btn = QPushButton("닫기")
+        close_btn.clicked.connect(self.close)
+        row = QHBoxLayout()
+        row.addWidget(self.clear_btn)
+        row.addStretch(1)
+        row.addWidget(self.apply_btn)
+        row.addWidget(close_btn)
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(self.info)
+        lay.addLayout(form)
+        lay.addWidget(QLabel("쓰일 코드"))
+        lay.addWidget(self.preview)
+        lay.addWidget(self.warn)
+        lay.addWidget(self.note)
+        lay.addStretch(1)
+        lay.addLayout(row)
+
+        for w in (self.backend, self.paper, self.size):
+            w.currentIndexChanged.connect(self._refresh)
+        for w in (self.one, self.two, self.same):
+            w.toggled.connect(self._refresh)
+        for e in (self.m_inner, self.m_upper, self.m_outer, self.m_bottom):
+            e.textChanged.connect(self._refresh)
+
+    # -- 읽기 -----------------------------------------------------------------
+    def _root_text(self) -> str:
+        w = self._win
+        if self._root == w._path:
+            return w.editor.toPlainText()
+        try:
+            return read_manuscript(self._root)
+        except (OSError, UnicodeDecodeError):
+            return ""
+
+    def _dump_meta(self) -> dict:
+        return book_dump_meta(self._win, self._root)
+
+    def _load(self):
+        text = self._root_text()
+        self._params = page_read_params(text)
+        self._meta = self._dump_meta()
+        cls = str(self._meta.get("class") or "")
+        copt = str(self._meta.get("classoption") or self._meta.get("classoptions") or "")
+        self._class = cls
+        self._auto = page_backend_for(cls) if cls else "geometry"
+        self.info.setText(
+            f"대상: <b>{self._root.name}</b>"
+            + (" (지금 연 파일은 책의 하위 파일이라 책 최상위 파일에 씁니다)" if self._root != self._win._path else "")
+            + f"<br>문서 클래스: <b>{cls or '(알 수 없음 — ndhmd4tex 를 찾지 못했거나 class: 가 없습니다)'}</b>"
+            + f" → 자동 방식: <b>{self._auto}</b>")
+        self.size.blockSignals(True)
+        self.size.clear()
+        self.size.addItem("(지정 안 함)", "")
+        for sz in (PAGE_SIZES_FAPA if self._auto == "fapapersize" else PAGE_SIZES_STD):
+            self.size.addItem(sz, sz)
+        self.size.blockSignals(False)
+        p = self._params
+        if p:
+            self.size.setCurrentIndex(max(0, self.size.findData(p.get("size", ""))))
+            self.backend.setCurrentIndex(0 if p["backend"] == self._auto else
+                                         1 if p["backend"] == "fapapersize" else 2)
+            self.paper.setCurrentIndex(max(0, self.paper.findData(p["paper"])))
+            (self.two if p["side"] == "two" else self.one).setChecked(True)
+            m = p["margins"]
+            self.same.setChecked(len(m) == 2)
+            self.m_inner.setText(m[0]); self.m_upper.setText(m[1])
+            if len(m) == 4:
+                self.m_outer.setText(m[2]); self.m_bottom.setText(m[3])
+        else:
+            found = _PAPER_CLASSOPTION_RE.search(copt)
+            if found and self.paper.findData(found.group(1)) >= 0:
+                self.paper.setCurrentIndex(self.paper.findData(found.group(1)))
+            (self.one if re.search(r"\boneside\b", copt) else self.two).setChecked(True)
+            self.same.setChecked(True)
+            self.m_inner.setText("20mm"); self.m_upper.setText("25mm")
+        self.clear_btn.setEnabled(p is not None)
+        self._copt = copt
+        self._refresh()
+
+    def _check_conflicts(self, copt: str):
+        warns, infos = page_layout_conflicts(self._meta.get("preamble", ""), copt)
+        # 글자 크기: 합친 classoption 에서 이 대화창이 쓴 토큰을 빼고 남은 크기를 본다.
+        toks = [t.strip() for t in str(copt).split(",") if t.strip()]
+        if self._params:
+            for mine in ([("twoside" if self._params["side"] == "two" else "oneside")]
+                         + ([self._params["size"]] if self._params.get("size") else [])):
+                if mine in toks:
+                    del toks[len(toks) - 1 - toks[::-1].index(mine)]
+        others = [t for t in toks if re.fullmatch(r"\d+pt", t)]
+        chosen = self.size.currentData() or ""
+        if others and chosen:
+            num = lambda t: int(t[:-2])
+            if self._auto == "fapapersize":
+                infos.append(f"classoption 에 이미 {', '.join(others)} 가 있습니다. memoir 는 나중에 적힌 크기가 "
+                             f"이기므로(oblivoir 도 같을 것으로 봅니다) {chosen} 이 적용됩니다.")
+            elif any(num(t) > num(chosen) for t in others):
+                warns.append(f"classoption 에 이미 {', '.join(others)} 가 있습니다. 표준 클래스는 더 큰 크기가 이기므로 "
+                             f"{chosen} 이 적용되지 않습니다")
+        # 우리 블록은 dump 에도 들어 있으니 page_layout_conflicts 가 빼고 본다.
+        if warns:
+            self.warn.setText("⚠ 충돌할 수 있습니다:<br>• " + "<br>• ".join(warns)
+                              + "<br>(setup 파일의 preamble·classoption 도 포함해 검사했습니다)")
+        self.warn.setVisible(bool(warns))
+        extra = list(infos)
+        if self._root == self._win._path and self._win.editor.document().isModified():
+            extra.append("저장하지 않은 변경도 함께 검사했습니다.")
+        self.note.setText("\n".join(extra))
+
+    # -- 값 -------------------------------------------------------------------
+    def _backend(self) -> str:
+        v = self.backend.currentData()
+        return self._auto if v == "auto" else v
+
+    def _margins(self) -> list:
+        vals = [self.m_inner.text(), self.m_upper.text()]
+        if not self.same.isChecked():
+            vals += [self.m_outer.text(), self.m_bottom.text()]
+        return vals
+
+    def _block(self):
+        return page_block_lines(self._backend(), self.paper.currentData(),
+                                "two" if self.two.isChecked() else "one", self._margins(),
+                                self.size.currentData() or "")
+
+    def _refresh(self, *_):
+        two = self.two.isChecked()
+        self.l_inner.setText("안쪽" if two else "왼쪽")
+        self.l_outer.setText("바깥쪽" if two else "오른쪽")
+        same = self.same.isChecked()
+        self.m_outer.setEnabled(not same)
+        self.m_bottom.setEnabled(not same)
+        try:
+            self.preview.setPlainText("\n".join(self._block()) + "\n\n" +
+                                      page_classoption_line("two" if two else "one", self.size.currentData() or ""))
+            self.apply_btn.setEnabled(True)
+        except ValueError as e:
+            self.preview.setPlainText(str(e))
+            self.apply_btn.setEnabled(False)
+        if getattr(self, "_copt", None) is not None:
+            self._check_conflicts(self._copt)
+
+    # -- 쓰기 -----------------------------------------------------------------
+    def _write(self, block, side, size=""):
+        return self._win.edit_root_frontmatter(
+            self._root, lambda text: page_apply_to_text(text, block, side, size), "쪽 설정", self)
+
+    def _apply(self):
+        try:
+            block = self._block()
+        except ValueError as e:
+            QMessageBox.warning(self, "쪽 설정", str(e))
+            return
+        if self._write(block, "two" if self.two.isChecked() else "one", self.size.currentData() or ""):
+            self._win.statusBar().showMessage(f"쪽 설정을 {self._root.name} 의 front matter 에 썼습니다.", 6000)
+            self._load()
+
+    def _clear(self):
+        if self._write(None, None, ""):
+            self._win.statusBar().showMessage("쪽 설정 블록을 지웠습니다.", 6000)
+            self._load()
+
+
+
 class BibliographyGridDialog(QDialog):
     """[참고문헌] 버튼을 누르면 뜨는 그리드. LyX 의 WYSIWYM 을 참고했다 —
     `:::{thebibliography}` 블록은 편집창에서 버튼 하나로 접혀 있고, 실제
@@ -15389,6 +15790,226 @@ def set_frontmatter_key(path: Path, key: str, value: str | None):
         path.write_text(new_text, encoding="utf-8")
     except OSError:
         pass
+
+
+
+# ===========================================================================
+# 쪽 설정 — front matter 의 preamble+: 에 관리 블록을 쓰고 읽는다
+# ===========================================================================
+#
+# ndhmd4tex 에는 geometry: 같은 키가 없다(페이지 레이아웃은 preamble 이 정한다는 방침).
+# 이 기능은 그 preamble 글자를 대신 써 주는 도구일 뿐이다 — 쓴 결과는 평범한 preamble 이라
+# Writer 없이 ndhmd4tex 만 써도 그대로 동작한다. 블록은 표지 주석으로 감싸고, 첫 줄에 설정값을
+# 적어 두어 대화창이 LaTeX 를 해석하지 않고 값을 되살린다.
+
+PAGE_MARK = "ndhmdWriter:page"
+PAGE_OPEN = f"% >>> {PAGE_MARK}"
+PAGE_CLOSE = f"% <<< {PAGE_MARK}"
+
+#: 용지(가로, 세로 mm) — LaTeX 표준 클래스의 ISO 값. fapapersize 는 이 크기를 처음 두 인자로 직접 적는다.
+PAGE_PAPERS = {"a4paper": (210, 297), "a5paper": (148, 210), "b4paper": (250, 353),
+               "b5paper": (176, 250), "b6paper": (125, 176)}
+#: 글자 크기 — 표준 클래스는 10·11·12pt, oblivoir·memoir 는 9~14pt. `classoption+:` 로 쓴다.
+PAGE_SIZES_STD = ("10pt", "11pt", "12pt")
+PAGE_SIZES_FAPA = ("9pt", "10pt", "11pt", "12pt", "14pt")
+PAGE_LENGTH_RE = re.compile(r"^\d+(?:\.\d+)?(?:mm|cm|pt|in|bp|pc)?$")
+_PAGE_FAPA_CLASSES = ("oblivoir", "memoir")
+
+
+def page_backend_for(documentclass: str) -> str:
+    """oblivoir·memoir 는 fapapersize, 그 밖의 클래스는 geometry."""
+    return "fapapersize" if str(documentclass or "").strip().lower() in _PAGE_FAPA_CLASSES else "geometry"
+
+
+def page_norm_length(text: str) -> str:
+    """'20' → '20mm'. 단위가 있으면 그대로. 형식이 틀리면 ValueError."""
+    t = str(text).strip().replace(" ", "")
+    if not PAGE_LENGTH_RE.match(t):
+        raise ValueError(f"길이 형식이 아닙니다: {text!r} (예: 20, 20mm, 2cm)")
+    return t if t[-1].isalpha() else t + "mm"
+
+
+def page_block_lines(backend: str, paper: str, side: str, margins: list, size: str = "") -> list:
+    """관리 블록의 줄들. margins 는 대화창 순서(안쪽·왼쪽, 위, 바깥쪽·오른쪽, 아래)이고 값이 2개면
+    (안쪽, 위)만 주어 바깥쪽·아래쪽은 같은 값으로 본다(fapapersize 에서는 `*`)."""
+    if paper not in PAGE_PAPERS:
+        raise ValueError(f"지원하지 않는 용지: {paper}")
+    if len(margins) not in (2, 4):
+        raise ValueError("여백은 2개 또는 4개여야 합니다.")
+    m = [page_norm_length(x) for x in margins]
+    head = f"{PAGE_OPEN}  backend={backend} paper={paper} side={side} margin={','.join(m)}"
+    if size:
+        head += f" size={size}"
+    note = "% 자동 생성 — [설정 ▶ 쪽 설정]으로 고치세요. 직접 고치면 다음 적용 때 덮어씁니다."
+    if backend == "fapapersize":
+        w, h = PAGE_PAPERS[paper]
+        left, upper = m[0], m[1]
+        right = "*" if len(m) == 2 else m[2]
+        bottom = "*" if len(m) == 2 else m[3]
+        body = [r"\usepackage{fapapersize}",
+                rf"\usefapapersize{{{w}mm,{h}mm,{left},{right},{upper},{bottom}}}"]
+    else:
+        inner, upper = m[0], m[1]
+        outer = inner if len(m) == 2 else m[2]
+        bottom = upper if len(m) == 2 else m[3]
+        keys = ("inner", "outer") if side == "two" else ("left", "right")
+        body = [rf"\usepackage[{paper},{keys[0]}={inner},{keys[1]}={outer},top={upper},bottom={bottom}]{{geometry}}"]
+    return [head, note, *body, PAGE_CLOSE]
+
+
+def page_classoption_line(side: str, size: str = "") -> str:
+    opts = ["twoside" if side == "two" else "oneside"] + ([size] if size else [])
+    return f"classoption+: {', '.join(opts)}  # {PAGE_MARK}"
+
+
+def page_read_params(text: str):
+    """원고(front matter 포함) 안의 관리 블록 머리줄에서 설정값을 읽는다. 없으면 None."""
+    m = re.search(rf"^[ \t]*{re.escape(PAGE_OPEN)}[ \t]+(.*)$", text, re.M)
+    if not m:
+        return None
+    kv = dict(t.split("=", 1) for t in m.group(1).split() if "=" in t)
+    try:
+        margins = [x for x in kv.get("margin", "").split(",") if x]
+        if kv.get("paper") not in PAGE_PAPERS or len(margins) not in (2, 4):
+            return None
+        return {"backend": kv.get("backend", "geometry"), "paper": kv["paper"],
+                "side": "two" if kv.get("side") == "two" else "one", "margins": margins,
+                "size": kv.get("size", "") if kv.get("size", "") in PAGE_SIZES_FAPA else ""}
+    except (KeyError, ValueError):
+        return None
+
+
+_PAGE_BLOCK_HEADER_RE = re.compile(r"^[|][+-]?\s*(?:#.*)?$")
+
+
+def block_apply_to_frontmatter(fm_lines: list, name: str, block: list | None, drop_empty: bool = True) -> list:
+    """front matter 줄 목록에서 이름이 name 인 관리 블록(`% >>> ndhmdWriter:<name>` … `% <<< …`)을
+    지우고, block 이 있으면 `preamble+: |` 끝에 다시 쓴다. 새 줄 목록을 돌려주고, 붙일 수 없는 형태면 ValueError.
+
+    preamble+: 키를 둘 만들면 YAML 중복 키 오류이므로, 이미 있는 `preamble+: |` 블록 끝에 붙인다.
+    한 줄 값이나 `>` 접기 형태에는 붙이지 않는다(`%` 주석 줄이 접혀 버린다)."""
+    op, cl = f"% >>> ndhmdWriter:{name}", f"% <<< ndhmdWriter:{name}"
+    lines = list(fm_lines)
+    i = 0
+    while i < len(lines):
+        if lines[i].strip().startswith(op):
+            j = i
+            while j < len(lines) and not lines[j].strip().startswith(cl):
+                j += 1
+            del lines[i:min(j + 1, len(lines))]
+        else:
+            i += 1
+    if drop_empty:
+        # 비어 버린 `preamble+: |` 제거(우리가 만든 것으로 본다)
+        for idx, l in enumerate(lines):
+            m = re.match(r"^preamble\+\s*:\s*(.*)$", l)
+            if m and _PAGE_BLOCK_HEADER_RE.match(m.group(1).strip() or "x"):
+                end = idx + 1
+                while end < len(lines) and (not lines[end].strip() or lines[end][:1] in " \t"):
+                    end += 1
+                if not any(x.strip() for x in lines[idx + 1:end]):
+                    del lines[idx:end]
+                break
+    if block is None:
+        return lines
+    key_idx = next((i for i, l in enumerate(lines) if re.match(r"^preamble\+\s*:", l)), None)
+    if key_idx is None:
+        lines += ["preamble+: |", *[("  " + b) for b in block]]
+    else:
+        val = re.match(r"^preamble\+\s*:\s*(.*)$", lines[key_idx]).group(1).strip()
+        if not _PAGE_BLOCK_HEADER_RE.match(val):
+            raise ValueError("front matter 의 `preamble+:` 가 여러 줄 블록(`|`)이 아니라 관리 블록을 붙일 수 없습니다. "
+                             "`preamble+: |` 형태로 바꾸거나 그 값을 `preamble:` 쪽으로 옮겨 주세요.")
+        end = key_idx + 1
+        while end < len(lines) and (not lines[end].strip() or lines[end][:1] in " \t"):
+            end += 1
+        body = lines[key_idx + 1:end]
+        last = max((k for k, x in enumerate(body) if x.strip()), default=-1)
+        indent = "  "
+        if last >= 0:
+            first = next(x for x in body if x.strip())
+            indent = first[:len(first) - len(first.lstrip())]
+        at = key_idx + 1 + last + 1
+        lines[at:at] = [indent + b for b in block]
+    return lines
+
+
+def page_apply_to_frontmatter(fm_lines: list, block: list | None, side: str | None, size: str = "") -> tuple:
+    """front matter 줄 목록에서 쪽 설정 블록(과 classoption+ 한 줄)을 지우고, block 이 있으면 다시 쓴다.
+    (새 줄 목록, 알림 목록)을 돌려준다. 어쩔 수 없는 형태면 ValueError."""
+    notes = []
+    lines = [l for l in fm_lines
+             if not (re.match(r"^classoption\+\s*:", l) and PAGE_MARK in l)]   # 관리 classoption+ 줄 제거
+    lines = block_apply_to_frontmatter(lines, "page", block)
+    if block is None:
+        return lines, notes
+    if side is not None:
+        if any(re.match(r"^classoption\+\s*:", l) for l in lines):
+            notes.append("front matter 에 이미 `classoption+:` 가 있어 단면/양면(oneside/twoside)과 글자 크기는 "
+                         "넣지 않았습니다. 직접 적어 주세요.")
+        else:
+            lines.append(page_classoption_line(side, size))
+    return lines, notes
+
+
+def block_apply_to_text(text: str, name: str, block: list | None) -> tuple:
+    """원고 전체 글에 관리 블록 하나를 적용한다. (새 글, 알림 목록, 바뀐 앞부분 (0, 끝) 또는 None)."""
+    return _fm_text_edit(text, block is not None,
+                         lambda fm: (block_apply_to_frontmatter(fm, name, block), []))
+
+
+def _fm_text_edit(text: str, create: bool, fn) -> tuple:
+    """front matter 줄에 fn(줄 목록) -> (새 줄 목록, 알림) 을 적용한다. 새 글은 언제나 text[끝:] 로 끝난다."""
+    m = FRONTMATTER_RE.match(text)
+    if m:
+        new_lines, notes = fn(m.group(1).split("\n"))
+        if not any(l.strip() for l in new_lines):
+            # 우리가 만들었던 front matter 가 비었으면 통째로 없앤다.
+            rest = text[m.end():]
+            stripped = rest.lstrip("\n")
+            return stripped, notes, (0, m.end() + len(rest) - len(stripped))
+        closing = text[m.end(1):m.end()]          # "\n---" 과 그 뒤 공백까지 원문 그대로
+        return "---\n" + "\n".join(new_lines) + closing + text[m.end():], notes, (0, m.end())
+    if not create:
+        return text, [], None
+    new_lines, notes = fn([])
+    return "---\n" + "\n".join(new_lines) + "\n---\n\n" + text, notes, (0, 0)
+
+
+def page_apply_to_text(text: str, block: list | None, side: str | None, size: str = "") -> tuple:
+    """원고 전체 글에 쪽 설정을 적용한다. front matter 가 없으면(block 이 있을 때) 새로 만든다.
+    (새 글, 알림 목록, 바뀐 앞부분 구간 (0, 끝) 또는 None) — 새 글은 언제나 text[끝:] 로 끝난다."""
+    return _fm_text_edit(text, block is not None,
+                         lambda fm: page_apply_to_frontmatter(fm, block, side, size))
+
+
+_PAGE_LAYOUT_PATTERNS = (
+    (re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{[^}]*\b(geometry|fapapersize)\b[^}]*\}"),
+     "{0} 패키지를 불러오고 있습니다"),
+    (re.compile(r"\\(geometry|newgeometry|usefapapersize)\b"), "\\{0} 명령이 있습니다"),
+    (re.compile(r"\\(setlrmarginsandblock|setulmarginsandblock|setlrmargins|setulmargins|settypeblocksize|"
+                r"setheadfoot|setheaderspaces|checkandfixthelayout|settrimmedsize|settrims|setpagesize)\b"),
+     "memoir 의 쪽 설정 명령 \\{0} 이 있습니다"),
+)
+_PAPER_CLASSOPTION_RE = re.compile(r"\b([abc]\d?paper|letterpaper|legalpaper|executivepaper)\b")
+
+
+def page_layout_conflicts(preamble: str, classoption: str = "") -> tuple:
+    """(경고 목록, 알림 목록). 우리 관리 블록과 TeX 주석은 검사에서 뺀다."""
+    pre = re.sub(rf"{re.escape(PAGE_OPEN)}.*?{re.escape(PAGE_CLOSE)}", "", str(preamble or ""), flags=re.S)
+    pre = re.sub(r"(?<!\\)%.*", "", pre)
+    warns = []
+    for rx, msg in _PAGE_LAYOUT_PATTERNS:
+        for mm in rx.finditer(pre):
+            w = msg.format(mm.group(1))
+            if w not in warns:
+                warns.append(w)
+    infos = []
+    papers = _PAPER_CLASSOPTION_RE.findall(str(classoption or ""))
+    if papers:
+        infos.append(f"classoption 에 {', '.join(papers)} 가 있습니다. 쪽 설정은 용지 크기를 직접 지정하므로 "
+                     "보통 문제없지만, 의도한 용지인지 확인하세요.")
+    return warns, infos
 
 
 
@@ -18034,6 +18655,8 @@ class MainWindow(QMainWindow):
 
         m = self.menuBar().addMenu("설정(&S)")
         act(m, "환경설정(&P)…", "Ctrl+,", self.open_preferences)
+        act(m, "쪽 설정(&G)…", None, self.open_page_setup)
+        act(m, "문서 글꼴(&F)…", None, self.open_font_setup)
         m.addSeparator()
         act(m, "테마 전환(&T)", "Ctrl+Shift+D", self.toggle_theme)
         act(m, "글자 크게", QKeySequence.ZoomIn, lambda: self._zoom(0.5))
@@ -23174,6 +23797,186 @@ class MainWindow(QMainWindow):
         self.editor.setFocus()
         self.statusBar().showMessage("수식을 고쳤습니다" if orig else "수식을 넣었습니다", 3000)
 
+    def edit_root_frontmatter(self, root: Path, fn, title: str, parent=None) -> bool:
+        """책 최상위 원고의 앞부분(front matter)을 fn(글) -> (새 글, 알림, (0, 끝) 또는 None) 으로 고친다.
+        지금 연 파일이면 편집창에 한 번의 수정으로 넣고(실행 취소 한 번), 아니면 파일에 쓴다."""
+        parent = parent or self
+        if root == self._path:
+            text = self.editor.toPlainText()
+        else:
+            try:
+                text = read_manuscript(root)
+            except (OSError, UnicodeDecodeError) as e:
+                QMessageBox.warning(parent, title, f"{root.name} 을(를) 읽지 못했습니다: {e}")
+                return False
+        try:
+            new, notes, rng = fn(text)
+        except ValueError as e:
+            QMessageBox.warning(parent, title, str(e))
+            return False
+        if new != text:
+            if root == self._path:
+                end = rng[1]
+                tail = text[end:]
+                prefix = new[:len(new) - len(tail)]
+                u16 = lambda t: len(t.encode("utf-16-le")) // 2
+                cur = self.editor.textCursor()
+                cur.beginEditBlock()
+                cur.setPosition(0)
+                cur.setPosition(u16(text[:end]), QTextCursor.KeepAnchor)
+                cur.insertText(prefix)
+                cur.endEditBlock()
+            else:
+                try:
+                    root.write_text(new, encoding="utf-8")
+                except OSError as e:
+                    QMessageBox.warning(parent, title, f"{root.name} 을(를) 쓰지 못했습니다: {e}")
+                    return False
+        if notes:
+            QMessageBox.information(parent, title, "\n".join(notes))
+        return True
+
+    def open_font_setup(self):
+        """[설정 ▶ 문서 글꼴] — 같은 폴더의 font.py(font.exe)를 Writer 모드로 띄운다. 끝나면 결과를 글꼴 블록으로 쓴다."""
+        if self._path is None:
+            QMessageBox.information(self, "문서 글꼴", "먼저 원고를 열어 주세요.")
+            return
+        proc = getattr(self, "_font_proc", None)
+        if (proc is not None and proc.state() != QProcess.NotRunning) or getattr(self, "_font_page", None) is not None:
+            QMessageBox.information(self, "문서 글꼴", "글꼴 도구가 이미 열려 있습니다.")
+            return
+        engine = self.prefs.tex_engine()
+        if engine not in ("xelatex", "lualatex"):
+            QMessageBox.information(
+                self, "문서 글꼴",
+                f"지금 엔진이 {engine} 입니다. fontspec 글꼴 선언은 XeLaTeX 나 LuaLaTeX 에서만 쓸 수 있습니다.\n"
+                "환경설정에서 엔진을 바꾼 뒤 다시 열어 주세요.")
+            return
+        tool, dirs = font_tool_find()
+        if tool is None:
+            QMessageBox.warning(
+                self, "문서 글꼴",
+                "font 도구를 찾지 못했습니다. font.py(또는 font.exe)를 ndhmdWriter 와 같은 폴더에 두세요.\n\n찾아본 곳:\n"
+                + "\n".join(f"  {d}" for d in dirs))
+            return
+        root = LabelIndex.book_files(self.index, self._path)[0]
+        meta = book_dump_meta(self, root)
+        klass = str(meta.get("class") or "")
+        pre = str(meta.get("preamble") or "")
+        scripts = "all" if font_wants_cjk(klass, pre) else "latin"
+        clash = font_conflicts(pre)
+        if clash:
+            ans = QMessageBox.question(
+                self, "문서 글꼴",
+                "preamble 에 이미 전역 글꼴 선언이 있습니다: " + ", ".join(clash)
+                + "\n(setup 파일의 preamble 도 포함해 검사했습니다)\n이 대화창이 쓰는 블록은 그 뒤에 와서 같은 계열을 덮어씁니다. 계속할까요?")
+            if ans != QMessageBox.Yes:
+                return
+        text = self.editor.toPlainText() if root == self._path else read_manuscript(root)
+        saved = font_read_state(text)
+        tmpdir = Path(tempfile.mkdtemp(prefix="ndhmd-font-"))
+        out = tmpdir / "out.json"
+        args = ["--out", str(out), "--scripts", scripts, "--engine", engine]
+        if klass:
+            args += ["--class", klass]
+        if saved:
+            st = tmpdir / "in.json"
+            st.write_text(json.dumps(saved["state"], ensure_ascii=False), encoding="utf-8")
+            args += ["--state", str(st)]
+        self._font_ctx = {"root": root, "out": out, "tmp": tmpdir, "scripts": scripts, "engine": engine,
+                          "wants_cjk": scripts == "all"}
+        if tool.suffix.lower() == ".py" and self._font_open_inprocess(tool, out, scripts, engine, klass,
+                                                                       saved["state"] if saved else None):
+            return
+        try:
+            cmd = font_tool_command(tool, args)
+        except ValueError as e:
+            QMessageBox.warning(self, "문서 글꼴", f"font.py 를 돌릴 파이썬을 찾지 못했습니다: {e}\n"
+                                "font.exe 를 같은 폴더에 두거나 PySide6 가 든 파이썬을 설치하세요.")
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return
+        proc = QProcess(self)
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+        proc.finished.connect(lambda code, st, p=proc: self._font_finished(p, code))
+        proc.errorOccurred.connect(lambda e, p=proc: self._font_error(p, e))
+        self._font_proc = proc
+        self.statusBar().showMessage("글꼴 도구를 열었습니다 — [Writer 로 보내기]를 누르면 반영됩니다.", 8000)
+        proc.start(cmd[0], cmd[1:])
+
+    def _font_open_inprocess(self, tool: Path, out: Path, scripts, engine, klass, state) -> bool:
+        """font.py 를 Writer 와 같은 파이썬·PySide6 안에서 창으로 띄운다(별도 인터프리터가 필요 없다 —
+        py2app 번들처럼 시스템 파이썬에 PySide6 가 없는 환경에서도 된다). 불러오지 못하면 False."""
+        try:
+            spec = importlib.util.spec_from_file_location("ndhmd_font_tool", str(tool))
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["ndhmd_font_tool"] = mod
+            spec.loader.exec_module(mod)
+            writer = {"out": str(out), "scripts": scripts, "engine": engine, "class": klass or None}
+            page = mod.FontPage(writer=writer)
+            if state:
+                page.load_state(state)
+            page.setWindowTitle("폰트 도구 v%s — ndhmdWriter" % getattr(mod, "VERSION", ""))
+        except Exception:                                  # 못 불러오면 별도 프로세스로 되돌아간다
+            sys.modules.pop("ndhmd_font_tool", None)
+            return False
+        page.setAttribute(Qt.WA_DeleteOnClose, True)
+        page.resize(1340, 820)
+        self._font_page = page
+        page.destroyed.connect(self._font_inprocess_closed)
+        page.show()
+        self.statusBar().showMessage("글꼴 도구를 열었습니다 — [Writer 로 보내기]를 누르면 반영됩니다.", 8000)
+        return True
+
+    def _font_inprocess_closed(self, *_):
+        self._font_page = None
+        ctx = getattr(self, "_font_ctx", None)
+        if ctx:
+            self._font_finished(None, 0 if ctx["out"].is_file() else 1)
+
+    def _font_error(self, proc, err):
+        if proc is not getattr(self, "_font_proc", None) or err != QProcess.FailedToStart:
+            return
+        self._font_proc = None
+        ctx = getattr(self, "_font_ctx", None)
+        if ctx:
+            shutil.rmtree(ctx["tmp"], ignore_errors=True)
+        QMessageBox.warning(self, "문서 글꼴", "font 도구를 실행하지 못했습니다.")
+
+    def _font_finished(self, proc, code):
+        if proc is not None:
+            if proc is not getattr(self, "_font_proc", None):
+                return
+            self._font_proc = None
+        ctx = self._font_ctx
+        try:
+            if code != 0 or not ctx["out"].is_file():
+                if code != 0 and proc is not None:
+                    log = decode_subprocess_output(bytes(proc.readAllStandardOutput())).strip()
+                    if log and code != 1:                      # 1 은 보내지 않고 닫은 것
+                        ConsoleOutputDialog(self, "글꼴 도구", log).show()
+                return
+            try:
+                res = json.loads(ctx["out"].read_text(encoding="utf-8"))
+                tex = str(res.get("tex", "")).strip()
+                state = res.get("state") if isinstance(res.get("state"), dict) else {}
+            except (OSError, ValueError) as e:
+                QMessageBox.warning(self, "문서 글꼴", f"font 도구의 결과를 읽지 못했습니다: {e}")
+                return
+            block = (font_block_lines(tex, state, ctx["scripts"], ctx["engine"], not ctx["wants_cjk"])
+                     if tex else None)
+            if self.edit_root_frontmatter(ctx["root"], lambda t: block_apply_to_text(t, "font", block), "문서 글꼴"):
+                self.statusBar().showMessage(
+                    "글꼴 블록을 %s 의 front matter 에 썼습니다." % ctx["root"].name if block
+                    else "지정한 글꼴이 없어 글꼴 블록을 지웠습니다.", 6000)
+        finally:
+            shutil.rmtree(ctx["tmp"], ignore_errors=True)
+
+    def open_page_setup(self):
+        if self._path is None:
+            QMessageBox.information(self, "쪽 설정", "먼저 원고를 열어 주세요.")
+            return
+        PageSetupDialog(self).exec()
+
     def open_image_import(self):
         if getattr(self, "_image_import_panel", None) is None:
             self._image_import_panel = ImageImportPanel(self)
@@ -25057,6 +25860,8 @@ _EN = {
     '도움말(&H)': 'Help(&H)',
     'ndhmdWriter 정보 / 단축키(&H)': 'About ndhmdWriter / Shortcuts(&H)',
     '사양서(&S)': 'Specification(&S)',
+    '쪽 설정(&G)…': 'Page setup(&G)…',
+    '문서 글꼴(&F)…': 'Document font(&F)…',
     '사양서 (pdf)(&S)': 'Specification (pdf)(&S)',
     '사양서 (web)(&E)': 'Specification (web)(&E)',
     '치트시트(&C)': 'Cheat sheet(&C)',

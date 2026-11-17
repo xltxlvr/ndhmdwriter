@@ -3,6 +3,37 @@
 버전은 `__version__` 하나로 관리한다(파일 맨 위). 수정이 있을 때마다
 마지막 자리(patch)를 하나씩 올린다. 최신 항목이 위에 온다.
 
+## 0.12.3
+- font.py(.py)는 이제 Writer와 같은 파이썬·PySide6 안에서 창으로 연다(importlib). py2app 번들에서 시스템 파이썬에 PySide6이 없어 창이 안 뜨던 문제 해결. 불러오기에 실패하면 예전처럼 별도 프로세스로 실행. font.exe는 계속 별도 프로세스.
+- 시험: 실제 font.py를 offscreen에서 같은 프로세스로 열어 보내기·닫기·정리, 가짜 도구(불러오기 실패)로 대체 경로. 미확인: py2app 번들 실제 환경.
+
+## 0.12.2
+- font 도구 찾는 폴더 확대: `.app` 안 `Contents/Resources`, `RESOURCEPATH`, 그리고 원본 `ndhmdWriter.py`가 있는 폴더(py2app `-A` 별칭 모드에서 font.py를 못 찾던 문제). 못 찾았을 때 안내창에 찾아본 폴더를 모두 보여 준다. 미확인: 실제 맥 py2app 환경.
+
+## 0.12.1
+- 메뉴 이름 `글꼴 설정…`을 `문서 글꼴…`로 변경(환경설정의 `글꼴`과 헷갈리지 않게). 대화상자 제목·안내 주석·매뉴얼도 같이 바꿈. 기능 변화 없음.
+
+## 0.12.0
+- `설정 ▶ 문서 글꼴…` 추가. 같은 폴더의 `font.py`(또는 `font.exe`)를 Writer 모드로 띄우고, 결과를 front matter `preamble+: |` 끝의 `ndhmdWriter:font` 관리 블록으로 쓴다(머리줄에 JSON으로 설정 저장 → 다시 열면 복원, 비우면 블록 삭제).
+- 대상은 xelatex·lualatex의 전역 `\set{main,sans,mono}[hangul|hanja]font`만. oblivoir 또는 kotex 계열이면 한글/한자 칸 포함, 아니면 라틴만. 기존 전역 선언이 있으면 열기 전에 경고.
+- font.py 1.1: `--out/--scripts/--engine/--class/--state/--texdir` 명령행 규약, `\newfontfamily`·`\fontspec` 계열 제외(코드는 남아 styler에서 그대로 사용 가능).
+- 내부: 쪽 설정의 front matter 편집을 `block_apply_*`·`edit_root_frontmatter`·`book_dump_meta`로 일반화(동작 동일, 기존 쪽 설정 시험 통과).
+- 시험: 순수 함수, offscreen 가짜 font 도구로 실행→블록 기록→실행 취소 한 번에 복구. **미확인**: 실제 font.py GUI 조작 후 보내기, 맥·윈도 실행, 묶음(exe) 환경의 시스템 파이썬 호출, 한글 글꼴 컴파일(샌드박스에 kotex 없음).
+
+## 0.11.2
+- 쪽 설정에 `글자 크기` 추가: 표준 클래스 10/11/12pt, oblivoir·memoir 9/10/11/12/14pt(또는 지정 안 함). 단면/양면과 같은 `classoption+:` 줄에 `twoside, 11pt`처럼 쓰고, 블록 첫 줄 주석에 `size=`로 저장해 다시 열 때 되살린다.
+- 경고: 표준 클래스에서 합친 `classoption`에 더 큰 크기(예: setup의 12pt)가 있으면 지정한 크기가 적용되지 않으므로 알린다(book으로 확인: 더 큰 크기가 순서와 무관하게 이김). memoir는 나중 값이 이겨 알림만.
+- 시험: offscreen 대화창(표준·memoir·oblivoir 사례), 목록·저장·복원·해제, 경고 조건. oblivoir 컴파일은 미확인.
+
+## 0.11.1
+- `쪽 설정`을 도구 메뉴에서 설정 메뉴(환경설정 아래)로 옮김. 생성 블록의 안내 주석도 `[설정 ▶ 쪽 설정]`으로(이미 쓴 블록은 다음 적용 때 갱신됨).
+
+## 0.11.0
+- 도구 ▶ 쪽 설정 추가: 용지(a4/a5/b4/b5/b6), 단면/양면, 여백(값 4개 또는 2개)을 골라 책 최상위 원고의 front matter `preamble+: |`에 표지 주석 블록으로 쓴다. oblivoir·memoir는 `\usefapapersize{w,h,l,r,u,b}`(용지 크기를 직접 적음, 값 2개면 `*`), 그 밖의 클래스는 geometry(`inner/outer` 또는 `left/right`). 단면/양면은 `classoption+:` 한 줄로도 쓴다.
+- 설정값은 블록 첫 줄 주석에 저장해 다시 열 때 되살린다. 이미 있는 `preamble+: |` 끝에 붙이고(중복 키 방지), 한 줄 값이면 거부. `해제` 버튼으로 블록 제거. 편집창은 한 번의 실행 취소로 되돌림.
+- 경고: setup까지 합친 preamble에 geometry/fapapersize/memoir 쪽 설정 명령이 이미 있으면 알림(`ndhmd4tex --dump-meta` 사용, 저장 전 변경은 임시 복사본으로 검사).
+- 시험: 블록 쓰기·갱신·제거·거부 사례의 순수 함수 시험, 실제 ndhmd4tex 출력(`classoption+` 병합, 헤더 위치), offscreen 대화창 조작, geometry 방식 pdflatex 컴파일(A5 크기). fapapersize/oblivoir 컴파일은 미확인(미설치).
+
 ## 0.10.1
 - bib 인용 삽입: 다크 모드에서 안 보이던 안내 글씨 수정, `citekey 삽입` 버튼 추가(더블클릭도 삽입, 한 번 클릭은 선택만), 삽입 형식을 `[@citekey]`로 변경.
 - 시험: offscreen에서 버튼·더블클릭·한 번 클릭 무삽입·다크 팔레트에서 안내색 확인. 실제 macOS 다크 모드 화면은 미확인. 같은 `palette(mid)`를 쓰는 다른 창의 안내 글씨는 이번에 손대지 않음.

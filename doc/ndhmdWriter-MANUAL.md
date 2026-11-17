@@ -1,6 +1,6 @@
 ---
 title: ndhmdWriter 사용자 설명서 (참조편) — 초고
-author: ndhmdWriter 0.10.1 기준
+author: ndhmdWriter 0.12.3 기준
 toplevel: chapter
 setup: [articlelike.nmd,defaultnoto.nmd]
 classoption+: chapter
@@ -29,7 +29,7 @@ compileoption: --missingchar
 
 # 이 설명서에 대하여 {#ch:about}
 
-이 설명서는 ***ndhmdWriter*** 버전 0.10.1의 **참조편**이다. 처음 쓰는 사람을 안내하는 글이 아니라, 앱이 가진 기능을 메뉴 순서와 화면 구성에 맞추어 빠짐없이 적은 사전이다. "왜 이렇게 만들었는가"는 별도의 안내문(*무엇을 위해 만들었는가*)이 다루고, 이 글은 "무엇이 어떻게 동작하는가"만 적는다.
+이 설명서는 ***ndhmdWriter*** 버전 0.12.3의 **참조편**이다. 처음 쓰는 사람을 안내하는 글이 아니라, 앱이 가진 기능을 메뉴 순서와 화면 구성에 맞추어 빠짐없이 적은 사전이다. "왜 이렇게 만들었는가"는 별도의 안내문(*무엇을 위해 만들었는가*)이 다루고, 이 글은 "무엇이 어떻게 동작하는가"만 적는다.
 
 ## 표기 약속 {#sec:notation}
 
@@ -1258,6 +1258,34 @@ ndhmd4tex 0.22부터 원고에 ` ```external tool=도구이름, caption=…, lab
   `widest=N`은 가장 긴 citekey의 글자 수로 매번 새로 계산하며, **항목 사이에는 빈 줄**을 둔다(없으면 ndhmd4tex가 여러 `\bibitem`을 한 문단으로 잇는다). 환경 이름은 정확히 `thebibliography`여야 한다.
 - 메뉴로 열 때 책 전체에서 블록을 찾는다: 없으면 현재 파일에 새로 만들고, 하나면 그 파일을, **둘 이상이면 "참고문헌 병합"**("둘 이상의 참고문헌이 있습니다(N개). 병합할까요?")을 묻는다. 예 → 맨 마지막 파일에 모으고 앞선 블록은 삭제, 아니오 → 맨 마지막 것만 유효하다. 블록이 다른 파일에 있으면 저장 뒤 그 위치로 이동한다(이전 위치는 `Alt+←`).
 
+## 쪽 설정과 문서의 글꼴 설정 
+
+### 쪽 설정 {#sec:page-setup}
+
+**[설정 ▶ 쪽 설정…]** (0.11.0 도구 메뉴에서 0.11.1에 설정 메뉴로 옮김). 용지와 여백을 골라 **책 최상위 원고의 front matter**에 쓴다. ndhmd4tex에는 `geometry:` 같은 키가 없고 쪽 모양은 `preamble:`이 정한다는 방침은 그대로다. 이 대화창은 그 preamble 글자를 대신 써 주는 도구일 뿐이라, 쓴 결과는 평범한 preamble이며 Writer 없이 ndhmd4tex만 써도 같게 동작한다.
+
+- **방식은 문서 클래스로 정한다.** `class:`(setup까지 풀어 합친 값, `ndhmd4tex --dump-meta`로 읽는다)가 `oblivoir`·`memoir`이면 `fapapersize`, 그 밖이면 `geometry`다. 방식 칸에서 직접 고를 수도 있다(클래스 이름이 다른 파생 클래스용).
+- **용지:** `a4paper`, `a5paper`, `b4paper`, `b5paper`, `b6paper`(LaTeX 표준 클래스의 ISO 크기. `b5paper`는 176×250 mm이며 한국의 신국판·46판과는 다르다).
+- **단면/양면:** 단면이면 왼쪽·오른쪽, 양면이면 안쪽·바깥쪽이다. 이 선택은 클래스 옵션 `oneside`/`twoside`로도 쓴다(`classoption+:` 한 줄. 이미 사용자 `classoption+:`가 있으면 넣지 않고 알려 준다).
+- **글자 크기**(0.11.2). `(지정 안 함)`이거나 표준 클래스는 `10pt 11pt 12pt`, oblivoir·memoir는 `9pt 10pt 11pt 12pt 14pt`. 단면/양면과 같은 `classoption+:` 한 줄에 함께 쓴다(예: `classoption+: twoside, 11pt  # ndhmdWriter:page`). 이미 `classoption`에 다른 크기가 있으면, **표준 클래스는 순서와 상관없이 더 큰 크기가 이기므로**(`[11pt,12pt]`도 `[12pt,11pt]`도 12pt, 이 환경에서 book으로 확인) 지정한 크기가 더 작을 때 경고한다. memoir는 나중에 적힌 크기가 이기므로 이 줄이 이긴다(memoir로 확인, oblivoir는 미설치라 확인하지 못했다). 이 경우 알림만 띄운다.
+- **여백:** 안쪽(왼쪽)·위·바깥쪽(오른쪽)·아래 네 칸. `바깥쪽·아래쪽을 안쪽·위와 같게`를 켜면 값 둘만 적는다(안쪽=바깥쪽, 위=아래). 단위를 안 적으면 mm이고 `mm cm pt in bp pc`를 받는다.
+- **fapapersize 코드:** `\usefapapersize{가로,세로,왼쪽,오른쪽,위,아래}`. 용지를 클래스 옵션으로 주지 않아도 되도록 가로·세로를 mm로 직접 적고, 값이 둘일 때 오른쪽·아래는 `*`(= 왼쪽·위와 같다)를 쓴다. 양면 문서에서는 왼쪽·오른쪽이 안쪽·바깥쪽의 뜻이 된다. **geometry 코드:** `\usepackage[a5paper,inner=…,outer=…,top=…,bottom=…]{geometry}`(단면은 `left`·`right`).
+- **쓰는 곳.** front matter의 `preamble+: |` 끝에 표지 주석으로 감싼 블록을 붙이고, 표지 주석의 첫 줄에 설정값(`backend=… paper=… side=… margin=…`)을 적어 둔다. 대화창은 LaTeX를 해석하지 않고 이 줄에서 값을 되살린다. `preamble+:`는 setup 파일의 preamble에 이어붙이므로 사용자의 `preamble:`을 건드리지 않는다. 이미 `preamble+: |`가 있으면 그 끝에 붙이고, 한 줄 값이나 `>` 형태라 붙일 수 없으면 거부하고 알려 준다(키가 둘이면 YAML 중복 키 오류다). 블록은 자동 생성이라 직접 고치면 다음 `적용`에서 덮어쓰며, `해제`는 블록과 `classoption+:` 줄을 지운다.
+- **지금 연 파일이 하위 파일이면** 책 최상위 파일에 쓴다(하위 파일의 front matter는 포함될 때 무시된다). 최상위 파일이 지금 열린 파일이면 편집창에 한 번의 수정으로 들어가므로 실행 취소 한 번에 되돌아간다.
+- **경고.** setup 파일을 포함한 합친 preamble에 `geometry`·`fapapersize` 패키지, `\geometry`·`\newgeometry`·`\usefapapersize`, memoir의 쪽 설정 명령(`\setlrmarginsandblock` 등)이 이미 있으면 충돌할 수 있다고 알린다(TeX 주석과 이 대화창이 쓴 블록은 뺀다). `classoption`에 `a4paper` 같은 용지가 있으면 알림만 띄운다.
+- **시험하지 못한 것.** geometry 방식은 `class: book`에서 ndhmd4tex 변환 뒤 pdflatex으로 컴파일해 A5 쪽 크기와 `\documentclass[twoside]`가 나오는 것까지 확인했다. fapapersize·oblivoir는 이 환경에 설치되어 있지 않아 **컴파일은 하지 못했고**, 생성된 코드의 모양만 설명서(사용자 제공 형식)와 맞췄다. 맥·Windows 화면도 확인하지 못했다.
+
+### 문서 글꼴 {#sec:font-setup}
+
+`설정 ▶ 문서 글꼴…`은 전역 글꼴(main·sans·mono, 그리고 한글·한자 짝)을 고르는 도구다. 글꼴 고르기·미리보기는 별도 프로그램 `font.py`(묶음 배포에서는 `font.exe`)가 맡고, 이 파일을 **ndhmdWriter와 같은 폴더**에 둔다(맥 `.app`이면 `.app`이 있는 폴더와 `Contents/Resources`, py2app `-A`로 만든 앱이면 원본 `ndhmdWriter.py`가 있는 폴더도 찾는다). `font.py`는 Writer를 띄운 파이썬·PySide6 안에서 창으로 열리므로 별도 인터프리터가 필요 없다(py2app 번들도 마찬가지). 불러오지 못할 때만 별도 프로세스로 실행하며, 그때는 PySide6이 설치된 시스템 파이썬 또는 `font.exe`가 필요하다.
+
+- 엔진은 XeLaTeX·LuaLaTeX만 대상이다. 환경설정의 엔진이 pdfLaTeX이면 열지 않는다.
+- 문서가 oblivoir 클래스이거나 kotex(xetexko·luatexko)를 불러오면 `한글/한자` 칸이 함께 나오고, 아니면 `라틴 문자`만 나온다. 판단은 `--dump-meta`로 합친 class·preamble로 한다.
+- 도구에서 `Writer로 보내기`를 누르면 결과가 책 최상위 원고의 `preamble+: |` 끝에 `% >>> ndhmdWriter:font … % <<< ndhmdWriter:font` 블록으로 들어간다(쪽 설정과 같은 방식, 실행 취소 한 번). 머리줄에 설정이 JSON으로 저장되어 다시 열면 그대로 되살아난다. 지정한 글꼴이 하나도 없으면 블록을 지운다. 보내지 않고 닫으면 아무것도 바뀌지 않는다.
+- 다루는 명령은 `\setmainfont`·`\setsansfont`·`\setmonofont`와 한글·한자 짝(`\setmainhangulfont` 등)뿐이다. `\newfontfamily`·`\fontspec` 계열은 Writer 모드에서 빠진다.
+- 열기 전에 preamble(setup 파일 포함)에 이미 같은 전역 선언이 있으면 알린다. 우리 블록이 뒤에 와서 같은 계열을 덮어쓴다.
+- 도구는 밖에서 단독으로도 돌릴 수 있다(`font.py --out 결과.json --scripts latin|all --engine xelatex|lualatex --class 클래스 --state 이전.json`).
+
 ## 셸 명령 실행과 tblrDoumi {#sec:shell}
 
 ### 셸 명령 실행 {#sec:shell-run}
@@ -1636,6 +1664,8 @@ PDF 뷰어에서 `Ctrl`+클릭(뷰어마다 다름)을 하면 이 앱이 열리�
 ## 저장 위치 {#sec:prefs-store}
 
 설정은 Qt의 `QSettings`(조직 `ktug.org`, 앱 `ndhmdWriter`)에 저장된다. 운영체제별 실제 파일 위치는 Qt의 기본 규칙을 따른다(일반적으로 Windows는 레지스트리, macOS는 plist, 리눅스는 `~/.config`). 수식 편집기는 별도 저장소 `ktug.org / ndhmdMath`를 쓴다. 이 밖에 작업공간 안의 `.ndhmd/tags.json` `.ndhmd/notes.json`, 홈의 `~/.ndhmdwriter_font_cache.json`, `ndhmdsync.ini`가 있다.
+
+
 
 # 시작과 종료 {#ch:startup}
 
