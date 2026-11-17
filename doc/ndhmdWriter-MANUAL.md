@@ -1,6 +1,6 @@
 ---
 title: ndhmdWriter 사용자 설명서 (참조편) — 초고
-author: ndhmdWriter 0.12.3 기준
+author: ndhmdWriter 0.13.0 기준
 toplevel: chapter
 setup: [articlelike.nmd,defaultnoto.nmd]
 classoption+: chapter
@@ -29,7 +29,7 @@ compileoption: --missingchar
 
 # 이 설명서에 대하여 {#ch:about}
 
-이 설명서는 ***ndhmdWriter*** 버전 0.12.3의 **참조편**이다. 처음 쓰는 사람을 안내하는 글이 아니라, 앱이 가진 기능을 메뉴 순서와 화면 구성에 맞추어 빠짐없이 적은 사전이다. "왜 이렇게 만들었는가"는 별도의 안내문(*무엇을 위해 만들었는가*)이 다루고, 이 글은 "무엇이 어떻게 동작하는가"만 적는다.
+이 설명서는 ***ndhmdWriter*** 버전 0.13.0의 **참조편**이다. 처음 쓰는 사람을 안내하는 글이 아니라, 앱이 가진 기능을 메뉴 순서와 화면 구성에 맞추어 빠짐없이 적은 사전이다. "왜 이렇게 만들었는가"는 별도의 안내문(*무엇을 위해 만들었는가*)이 다루고, 이 글은 "무엇이 어떻게 동작하는가"만 적는다.
 
 ## 표기 약속 {#sec:notation}
 
@@ -82,7 +82,7 @@ compileoption: --missingchar
 \bottomrule
 \end{tblr}
 
-도움말 창에는 앱이 맞추어 둔 버전이 `Powered by ndhmd4tex 0.22.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026`이라고 적혀 있다(고정 문구).
+도움말 창에는 앱이 맞추어 둔 버전이 `Powered by ndhmd4tex 0.23.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026`이라고 적혀 있다(고정 문구).
 
 # 화면 구성 {#ch:layout}
 
@@ -1398,6 +1398,8 @@ ndhmd4tex 0.22부터 원고에 ` ```external tool=도구이름, caption=…, lab
 - 산출물은 대상 원고와 **같은 폴더**에 `이름.tex` `.pdf` `.log` `.nmdsync`(+ synctex, aux 등)로 생긴다. 책 컴파일이면 책 루트 이름으로, 이 파일만 컴파일이면 그 파일 이름으로 만들어진다.
 - **이 파일만 컴파일**은 그 파일 자신의 프론트매터와 `setup:` 상속을 그대로 적용하여 단독 문서로 컴파일한다. 부모가 없는 파일에서는 책 컴파일과 같다.
 - 도구가 없을 때: `latexmk 를 찾지 못했습니다 / PATH 에 latexmk 가 없습니다. TeX Live/MiKTeX 설치를 확인하십시오.`, `ksruncltex 를 찾지 못했습니다 / texlua/kpsewhich 를 PATH 에서 찾지 못했거나 ksruncltex 이 설치돼 있지 않은 것 같습니다.`
+
+- **최상위 헤더 가져오기**(0.13.0, `환경설정 ▶ 이 파일만`, 기본 **꺼짐**). 켜면 책의 하위 파일을 `이 파일만 컴파일`·`이 파일만 HTML로 변환`할 때 최상위 원고를 `--inherit-meta`로 변환기에 넘긴다. 최상위의 front matter(class, classoption, preamble, setup, `쪽 설정`·`문서 글꼴` 블록 포함)를 최상위를 변환할 때와 똑같이 해석해 쓰고, 그 파일 자신의 front matter는 버린다. 단독 컴파일에 맞지 않는 `title`·`subtitle`·`author`·`date`·`maketitle`·`tocloft`는 가져오지 않으므로 표지·목차는 생기지 않는다. 본문과 줄 번호는 그 파일 그대로라서 `.nmdsync`의 소스 파일·줄(앞뒤 검색)은 켜고 끌 때 같다(tex 쪽 줄만 헤더 길이만큼 달라진다). 최상위와 하위 파일의 폴더가 다르면 상속한 헤더의 상대 경로(`.bib`, `\input` 등)는 컴파일하는 폴더 기준으로 찾는다는 경고가 나온다. 책이 아닌 단독 원고와 책 전체 변환에는 영향이 없다. ndhmd4tex 0.25.0, ndhmd2html 0.6.0 이상이 필요하다.
 
 ## 변환·덤프·.tex 열기 {#sec:convert}
 

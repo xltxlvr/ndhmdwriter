@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.12.3"
+__version__ = "0.13.0"
 
 from contextlib import contextmanager
 
@@ -6392,6 +6392,10 @@ class Prefs:
         """```external 블록의 외부 도구 실행(--external)을 묻지 않고 늘 허용할지. 기본은 끔."""
         return self.s.value("prefs/external_always", False, type=bool)
 
+    def inherit_meta(self) -> bool:
+        """'이 파일만' 변환·컴파일 때 책 최상위 원고의 헤더를 가져올지(--inherit-meta). 기본은 끔."""
+        return self.s.value("prefs/inherit_meta", False, type=bool)
+
     def bibharvest_always(self) -> bool:
         """HTML 변환에 늘 `--bibharvest`(biber 문헌 목록 준비)를 줄지. 기본은 끔 — 필요할 때 묻는다."""
         return self.s.value("prefs/bibharvest_always", False, type=bool)
@@ -6913,6 +6917,16 @@ class PreferencesDialog(QDialog):
             "켜면 변환할 때마다 다시 만들므로 느릴 수 있습니다(이전 컴파일이 만든 .tex 와 texlua 가 필요).")
         form.addRow("문헌 목록(HTML)", self.bibharvest_always)
 
+        self.inherit_meta = QCheckBox("'이 파일만' 변환·컴파일 때 책 최상위 원고의 헤더를 가져와 쓴다 (--inherit-meta)")
+        self.inherit_meta.setChecked(self.prefs.inherit_meta())
+        self.inherit_meta.setToolTip(
+            "책 안의 한 파일만 컴파일(또는 HTML 변환)할 때, 최상위 원고의 front matter(class·classoption·preamble·\n"
+            "setup 등 — 쪽 설정·문서 글꼴 블록 포함)를 그대로 씁니다. 그 파일 자신의 front matter 는 무시하고,\n"
+            "title·author·date·maketitle·tocloft 는 가져오지 않아 표지·목차는 생기지 않습니다.\n"
+            "본문과 줄 번호는 그 파일 그대로여서 앞뒤 검색(.nmdsync)은 어긋나지 않습니다.\n"
+            "끄면 지금까지처럼 그 파일을 단독으로 처리합니다. 책 전체 변환·컴파일, 책이 아닌 단독 원고에는 영향이 없습니다.")
+        form.addRow("이 파일만", self.inherit_meta)
+
         self.jig_kinds = QPlainTextEdit(self.prefs.jigsaw_kinds_json())
         self.jig_kinds.setFixedHeight(96)
         self.jig_kinds.setTabChangesFocus(True)
@@ -7063,6 +7077,7 @@ class PreferencesDialog(QDialog):
             jigsaw_kinds=self.jig_kinds.toPlainText().strip(),
             external_always=self.external_always.isChecked(),
             bibharvest_always=self.bibharvest_always.isChecked(),
+            inherit_meta=self.inherit_meta.isChecked(),
         )
         JigsawFigure.use_kinds(jigsaw_kinds(self.jig_kinds.toPlainText()))
         apply_extra_path(self.extra_path.toPlainText())
@@ -15012,7 +15027,7 @@ class HelpDialog(QDialog):
         html = f"""
         <h2 style="margin-bottom:2px">ndhmdWriter</h2>
         <div style="color:#7a7368">버전 {__version__}</div>
-        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.22.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
+        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.25.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
         <p>
         지은이: {APP_AUTHOR}<br>
         라이선스: {APP_LICENSE}
@@ -21556,6 +21571,18 @@ class MainWindow(QMainWindow):
     #: ndhmd2html 이 biber 형식 .bbl 의 문헌 목록을 못 만들었거나(thebib.tex 없음) 낡았다고 알릴 때의 문구.
     _BIBHARVEST_NEEDED_RE = re.compile(r"biber 형식이라 바로 읽을 수 없습니다|-thebib\.tex 이\(가\).*오래됐습니다")
 
+    def inherit_args(self, target: Path) -> list:
+        """환경설정이 켜져 있고 target 이 책의 하위 파일이면 최상위 원고를 --inherit-meta 로 넘긴다."""
+        if not self.prefs.inherit_meta():
+            return []
+        try:
+            root = LabelIndex.book_files(self.index, target)[0]
+        except (IndexError, KeyError):
+            return []
+        if root == target:
+            return []
+        return ["--inherit-meta", str(root)]
+
     def bibharvest_args(self, force: bool = False) -> list:
         if force or self.prefs.bibharvest_always():
             return ["--bibharvest"]
@@ -21671,8 +21698,8 @@ class MainWindow(QMainWindow):
 
     def _start_html(self, target: Path, args: list, open_after: bool, external: bool = False,
                     harvest: bool = False):
-        cmd = self.html_tool.command([*args, *self.external_args(external), *self.bibharvest_args(harvest),
-                                      str(target)])
+        cmd = self.html_tool.command([*args, *self.inherit_args(target), *self.external_args(external),
+                                      *self.bibharvest_args(harvest), str(target)])
         if cmd is None:
             return
         out = html_output_path(target, args)
@@ -21749,7 +21776,7 @@ class MainWindow(QMainWindow):
         self._start_convert(target)
 
     def _start_convert(self, target: Path, external: bool = False):
-        cmd = self.tool.command(["--syncinfo", *self.animation_args(),
+        cmd = self.tool.command(["--syncinfo", *self.animation_args(), *self.inherit_args(target),
                                  *self.external_args(external), str(target)])
         if cmd is None:
             return

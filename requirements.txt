@@ -23,3 +23,6 @@ modulegraph
 Pillow>=10.0
 
 #py2app
+
+# fonttools. font.py가 요구한다.
+fontTools
