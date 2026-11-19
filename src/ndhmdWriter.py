@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.13.0"
+__version__ = "0.13.2"
 
 from contextlib import contextmanager
 
@@ -18655,6 +18655,7 @@ class MainWindow(QMainWindow):
         act(m, "책 컴파일(&B)", "Ctrl+Shift+B", lambda: self.run_compile("book"))
         act(m, "이 파일만 컴파일(&F)", "Ctrl+Alt+B", lambda: self.run_compile("file"))
         m.addSeparator()
+        act(m, "본문만 tex 변환(&D)", None, self.convert_body_tex)
         act(m, "변환후 tex 열기(&V)", "Ctrl+Alt+T", self.convert_and_open_tex)
         self._act_open_tex = act(m, "결과 tex 열기(&X)", "Ctrl+Shift+T",
                                  self.open_result_tex)
@@ -22204,8 +22205,34 @@ class MainWindow(QMainWindow):
 
         self._start_convert_open(self._path)
 
-    def _start_convert_open(self, target: Path, external: bool = False):
-        cmd = self.tool.command([*self.animation_args(), *self.external_args(external), str(target)])
+    def convert_body_tex(self):
+        """[컴파일 ▶ 본문만 tex 변환] — 지금 연 파일을 `--default NONE` 으로 변환해 `이름-body.tex` 로 남긴다.
+        front matter·프리앰블 없이 pandoc 이 만든 본문 LaTeX 조각 그대로이고, 컴파일하지 않는다.
+        (mapping·mappingrule 은 번역 규칙이라 그대로 적용되므로, `이 파일만` 설정이 켜져 있으면 최상위 것을 가져온다.)
+        이름을 달리 두어 같은 파일의 컴파일용 `이름.tex` 를 덮어쓰지 않는다."""
+        if self._path is None:
+            QMessageBox.information(self, "본문만 tex 변환", "먼저 원고를 열어 주세요.")
+            return
+        if self._compile_proc is not None:
+            return
+        if not self.confirm_discard_all("본문만 tex 변환"):
+            return
+        if not self._ensure_tool():
+            return
+        self._start_convert_open(self._path, body_only=True)
+
+    @staticmethod
+    def body_tex_path(target: Path) -> Path:
+        return target.with_name(target.stem + "-body.tex")
+
+    def _start_convert_open(self, target: Path, external: bool = False, body_only: bool = False):
+        if body_only:
+            args = ["--default", "NONE", "-o", str(self.body_tex_path(target)),
+                    *self.inherit_args(target),   # mapping·mappingrule·toplevel 은 --default NONE 에서도 적용된다
+                    *self.animation_args(), *self.external_args(external), str(target)]
+        else:
+            args = [*self.animation_args(), *self.external_args(external), str(target)]
+        cmd = self.tool.command(args)
         if cmd is None:
             return
 
@@ -22214,19 +22241,19 @@ class MainWindow(QMainWindow):
         proc.setWorkingDirectory(str(target.parent))
         proc.setProcessChannelMode(QProcess.MergedChannels)
         proc.finished.connect(
-            lambda code, st, p=proc, tgt=target: self._convert_open_finished(p, tgt))
+            lambda code, st, p=proc, tgt=target, b=body_only: self._convert_open_finished(p, tgt, b))
         proc.errorOccurred.connect(lambda e, p=proc: self._convert_failed(p))
         self._compile_proc = proc
         proc.start(cmd[0], cmd[1:])
 
-    def _convert_open_finished(self, proc, target: Path):
+    def _convert_open_finished(self, proc, target: Path, body_only: bool = False):
         if proc is not self._compile_proc:
             return
         self._compile_proc = None
         raw = decode_subprocess_output(bytes(proc.readAllStandardOutput()))
 
         if proc.exitCode() != 0:
-            if self.offer_external(raw, lambda ext, t=target: self._start_convert_open(t, ext)):
+            if self.offer_external(raw, lambda ext, t=target, b=body_only: self._start_convert_open(t, ext, b)):
                 return
             issues = self._parse_issue_lines(raw, target)
             if issues:
@@ -22240,11 +22267,14 @@ class MainWindow(QMainWindow):
                         strip_tool_prefix(l) for l in raw.splitlines())).show()
             return
 
-        tex_path = target.with_suffix(".tex")
+        tex_path = self.body_tex_path(target) if body_only else target.with_suffix(".tex")
         self._refresh_result_action()
         if not tex_path.exists():
             QMessageBox.warning(self, "변환 실패",
                                 f"{tex_path.name} 이(가) 생성되지 않았습니다.")
+            return
+        if body_only:
+            self.statusBar().showMessage(f"본문 tex 를 남겼습니다 — {tex_path.name}", 8000)
             return
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(tex_path))):
             QMessageBox.warning(
@@ -25875,6 +25905,7 @@ _EN = {
     '프론트매터 덤프': 'Dump front matter',
     '책 컴파일(&B)': 'Compile book(&B)',
     '이 파일만 컴파일(&F)': 'Compile this file only(&F)',
+    '본문만 tex 변환(&D)': 'Convert body to tex only(&D)',
     '변환후 tex 열기(&V)': 'Convert and open tex(&V)',
     '결과 tex 열기(&X)': 'Open result tex(&X)',
     'PDF에서 이 위치 보기(&V)': 'Show this position in PDF(&V)',
