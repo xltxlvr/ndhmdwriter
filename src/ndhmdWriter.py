@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.13.2"
+__version__ = "0.13.3"
 
 from contextlib import contextmanager
 
@@ -6842,6 +6842,8 @@ class PreferencesDialog(QDialog):
             "SumatraPDF(Windows)·Skim(macOS)에서 Ctrl+클릭으로 이 앱을 열 수 "
             "있게 합니다. 누르면 ndhmdsync.ini 에 지금 바로 등록합니다.")
         inverse_btn.clicked.connect(self._register_inverse_now)
+        self.inverse_status.setMinimumHeight(self.inverse_status.fontMetrics().lineSpacing() * 2 + 4)
+        self.inverse_status.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
         inverse_row = QHBoxLayout()
         inverse_row.addWidget(self.inverse_status, 1)
         inverse_row.addWidget(inverse_btn)
@@ -6861,6 +6863,10 @@ class PreferencesDialog(QDialog):
             "정해진 설치 위치에서 찾아 ndhmdsync.ini 의 [PDFVIEW] 에 "
             "등록합니다.")
         pdfview_btn.clicked.connect(self._register_pdfview_now)
+        # 줄바꿈하는 QLabel 은 폼 안에서 높이를 한 줄로 잡아 글자가 잘리는 일이 있다(특히 macOS) — 석 줄 높이를 보장한다.
+        self.pdfview_status.setMinimumHeight(self.pdfview_status.fontMetrics().lineSpacing() * 3 + 4)
+        self.pdfview_status.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+        self.pdfview_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         pdfview_row = QHBoxLayout()
         pdfview_row.addWidget(self.pdfview_status, 1)
         pdfview_row.addWidget(pdfview_btn)
@@ -17811,6 +17817,7 @@ class ExtToolSettingsDialog(QDialog):
         self.timeout = QSpinBox()
         self.timeout.setRange(10, 3600)
         self.timeout.setSuffix(" 초")
+        self.timeout.setMaximumWidth(140)
         self.timeout.setValue(window.ext_tool_timeout())
         form.addRow("기다리는 한도", self.timeout)
         lay.addLayout(form)
@@ -17981,7 +17988,7 @@ class AiSettingsDialog(QDialog):
         super().__init__(window)
         self._win = window
         self.setWindowTitle("AI 도우미 설정 (실험)")
-        self.resize(700, 560)
+        self.resize(780, 580)
         cfg = window.ai_config()
         self._items = [dict(x) for x in window.ai_prompts()]
         self._cur = -1
@@ -18005,18 +18012,24 @@ class AiSettingsDialog(QDialog):
             we.setToolTip("'웹 검색 허용'을 켠 지시문에서만 쓰입니다. 권한을 더 열면 위험할 수 있습니다(설명서 AI 도우미 절).")
             fl = QLabel()
             fl.setWordWrap(True)
+            fl.setMinimumHeight(fl.fontMetrics().lineSpacing() * 2 + 4)
+            fl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            for e in (pe, ae, we):
+                e.setMinimumWidth(360)
             self.path[t], self.args[t], self.web_args[t], self.found[t] = pe, ae, we, fl
             pe.textChanged.connect(self._refresh_found)
             page = QWidget()
             pf = QFormLayout(page)
+            pf.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)   # macOS 기본은 입력칸이 내용 크기에 머문다
             pf.setContentsMargins(0, 8, 0, 0)
-            pf.addRow("경로", pe)
+            pf.addRow(self._lbl("경로"), pe)
             pf.addRow("", fl)
             adv_w = QWidget()
             af = QFormLayout(adv_w)
+            af.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
             af.setContentsMargins(0, 0, 0, 0)
-            af.addRow("인자", ae)
-            af.addRow("인자 (웹 검색 허용)", we)
+            af.addRow(self._lbl("인자"), ae)
+            af.addRow(self._lbl("인자 (웹 검색 허용)"), we)
             adv_w.setVisible(False)
             self.adv[t] = adv_w
             tg = QToolButton()
@@ -18036,15 +18049,18 @@ class AiSettingsDialog(QDialog):
         self.timeout = QSpinBox()
         self.timeout.setRange(10, 900)
         self.timeout.setSuffix(" 초")
+        self.timeout.setMaximumWidth(140)
         self.timeout.setValue(cfg["timeout"])
         tool_tab = QWidget()
         tf = QFormLayout()
-        tf.addRow("사용할 도구", self.tool)
+        tf.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        tf.addRow(self._lbl("사용할 도구"), self.tool)
         tl = QVBoxLayout(tool_tab)
         tl.addLayout(tf)
         tl.addWidget(self.stack)
         tf2 = QFormLayout()
-        tf2.addRow("기다리는 한도", self.timeout)
+        tf2.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        tf2.addRow(self._lbl("기다리는 한도"), self.timeout)
         tl.addLayout(tf2)
         tl.addWidget(hint)
         tl.addStretch(1)
@@ -18072,6 +18088,7 @@ class AiSettingsDialog(QDialog):
         left.addWidget(self.listw, 1)
         left.addLayout(btns)
         right = QFormLayout()
+        right.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         right.addRow("이름", self.name)
         right.addRow("방식", self.mode)
         right.addRow("", self.web)
@@ -18095,6 +18112,14 @@ class AiSettingsDialog(QDialog):
         lay.addWidget(box)
         self._reload_list(0)
         self._refresh_found()
+
+    @staticmethod
+    def _lbl(text: str) -> QLabel:
+        """도구 탭의 여러 폼이 입력칸 왼쪽 끝을 같은 곳에 맞추도록 라벨 너비를 통일한다."""
+        lb = QLabel(text)
+        lb.setMinimumWidth(150)
+        lb.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        return lb
 
     def _refresh_found(self):
         for t in AI_TOOLS:
