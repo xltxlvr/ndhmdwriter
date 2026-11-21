@@ -1,6 +1,6 @@
 ---
 title: ndhmdWriter 사용자 설명서 (참조편) — 초고
-author: ndhmdWriter 0.13.6 기준
+author: ndhmdWriter 0.13.7 기준
 toplevel: chapter
 setup: [articlelike.nmd,defaultnoto.nmd]
 classoption+: chapter
@@ -1404,6 +1404,7 @@ ndhmd4tex 0.22부터 원고에 ` ```external tool=도구이름, caption=…, lab
 - **최상위 헤더 가져오기**(0.13.0, `환경설정 ▶ 이 파일만`, 기본 **꺼짐**). 켜면 책의 하위 파일을 `이 파일만 컴파일`·`이 파일만 HTML로 변환`할 때 최상위 원고를 `--inherit-meta`로 변환기에 넘긴다. 최상위의 front matter(class, classoption, preamble, setup, `쪽 설정`·`문서 글꼴` 블록 포함)를 최상위를 변환할 때와 똑같이 해석해 쓰고, 그 파일 자신의 front matter는 버린다. 단독 컴파일에 맞지 않는 `title`·`subtitle`·`author`·`date`·`maketitle`·`tocloft`는 가져오지 않으므로 표지·목차는 생기지 않는다. 본문과 줄 번호는 그 파일 그대로라서 `.nmdsync`의 소스 파일·줄(앞뒤 검색)은 켜고 끌 때 같다(tex 쪽 줄만 헤더 길이만큼 달라진다). 최상위와 하위 파일의 폴더가 다르면 상속한 헤더의 상대 경로(`.bib`, `\input` 등)는 컴파일하는 폴더 기준으로 찾는다는 경고가 나온다. 책이 아닌 단독 원고와 책 전체 변환에는 영향이 없다. ndhmd4tex 0.25.0, ndhmd2html 0.6.0 이상이 필요하다.
 
 - **ndhmd4tex 옵션**(0.13.5, `환경설정 ▶ 컴파일·도구`). 한 줄로 적은 옵션이 ndhmd4tex를 부르는 모든 명령(컴파일·변환·점검·메타 읽기) 맨 앞에 그대로 덧붙는다. Writer가 상황에 따라 붙이는 옵션(`--syncinfo`, `--default`, `-o`, `--inherit-meta`, `--external` 등)은 그대로이고, 같은 옵션이 겹치면 뒤에 오는 Writer 쪽이 이긴다. 현실적으로 필요한 건 `--encoding`(원고가 UTF-8이 아닐 때)과 `--config`(매핑 파일) 정도다. 공백이 든 값은 따옴표로 묶고, 상대 경로는 원고가 있는 폴더 기준이다. 잘못 적으면 모든 변환이 실패하니 의심되면 비워 본다. ndhmd2html과 `--guide`에는 붙지 않는다.
+- **결과 PDF 열기**(0.13.7). `이 파일만 컴파일`이 성공하면 책 최상위의 PDF(`main.pdf`)가 이미 있어도 방금 만든 그 파일의 PDF(`ch1.pdf`)를 `컴파일 뒤` 설정대로(정방향 검색이면 커서 위치로) 연다. 책 전체를 컴파일했을 때는 전과 같다. 다른 PDF는 지우지 않는다.
 
 ## 변환·덤프·.tex 열기 {#sec:convert}
 

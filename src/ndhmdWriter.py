@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.13.6"
+__version__ = "0.13.7"
 
 from contextlib import contextmanager
 
@@ -22091,8 +22091,11 @@ class MainWindow(QMainWindow):
             return
         cmd = None
         if self._path is not None:
+            # '이 파일만 컴파일' 로 방금 만든 하위 파일 자신의 PDF 라면 그 산출물(.nmdsync/.tex/.pdf)을 명시한다.
+            # 안 그러면 ndhmdsync 가 책 최상위의 PDF(main.pdf)가 있다는 이유로 그쪽을 연다 — 보려던 건 ch1.pdf 인데.
+            extra = self._forward_product_args(self._path) if pdf == self._path.with_suffix(".pdf") else []
             cmd = self.sync_tool.command([str(self._path), "--md-line",
-                                          str(self.editor.file_line())])
+                                          str(self.editor.file_line()), *extra])
         if cmd is None:
             self._open_pdf_plain(pdf)
             return
