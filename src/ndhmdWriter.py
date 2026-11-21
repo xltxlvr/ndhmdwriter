@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.13.3"
+__version__ = "0.13.6"
 
 from contextlib import contextmanager
 
@@ -1099,7 +1099,12 @@ class NdhmdHighlighter(QSyntaxHighlighter):
         #: 여는 `>` 를 흐리게 하는 것만으로 인용은 충분히 드러난다.
         self.f_quote = fmt(t.fg)
         self.f_label = fmt(t.marker, italic=True)
-        self.f_footnote = fmt(t.link, italic=True)
+        # 인라인 각주 `^[…]`·`[^키]` 는 길어지면 본문과 구별이 어렵다 — 링크색을 편집창 바탕에 옅게 섞은 색을 깔아
+        # 한눈에 덩어리로 보이게 한다(밝은·어두운 테마 모두 바탕에서 파생하므로 따로 정할 필요가 없다).
+        _lc, _bc = QColor(t.link), QColor(t.bg)
+        _mix = lambda k: QColor(*[round(_bc.getRgb()[i] * (1 - k) + _lc.getRgb()[i] * k) for i in range(3)]).name()
+        self.f_footnote = fmt(t.link, italic=True, bg=_mix(0.16))
+        self.f_footnote_def = fmt(t.link, italic=True)
         self.f_index = fmt(t.env_name)
         self.f_bold = fmt(bold=True)
         self.f_italic = fmt(italic=True)
@@ -1355,7 +1360,7 @@ class NdhmdHighlighter(QSyntaxHighlighter):
                     else:
                         mm = FOOTNOTE_DEF_RE.match(text)
                         if mm:
-                            self.setFormat(0, mm.start(2), self.f_footnote)
+                            self.setFormat(0, mm.start(2), self.f_footnote_def)
 
         # 보호 구간: 인라인 코드 안쪽은 다른 규칙을 적용하지 않는다.
         protected = bytearray(n)
@@ -6392,6 +6397,10 @@ class Prefs:
         """```external 블록의 외부 도구 실행(--external)을 묻지 않고 늘 허용할지. 기본은 끔."""
         return self.s.value("prefs/external_always", False, type=bool)
 
+    def ndhmd4tex_args(self) -> str:
+        """환경설정에 적은 ndhmd4tex 추가 옵션(한 줄). 컴파일·변환·점검 명령 맨 앞에 덧붙는다."""
+        return str(self.s.value("prefs/ndhmd4tex_args", "") or "").strip()
+
     def inherit_meta(self) -> bool:
         """'이 파일만' 변환·컴파일 때 책 최상위 원고의 헤더를 가져올지(--inherit-meta). 기본은 끔."""
         return self.s.value("prefs/inherit_meta", False, type=bool)
@@ -6923,6 +6932,16 @@ class PreferencesDialog(QDialog):
             "켜면 변환할 때마다 다시 만들므로 느릴 수 있습니다(이전 컴파일이 만든 .tex 와 texlua 가 필요).")
         form.addRow("문헌 목록(HTML)", self.bibharvest_always)
 
+        self.n4t_args = QLineEdit(self.prefs.ndhmd4tex_args())
+        self.n4t_args.setPlaceholderText("예: --encoding cp949   --config ./mapping.yaml")
+        self.n4t_args.setToolTip(
+            "ndhmd4tex 를 부르는 모든 명령(컴파일·변환·점검·메타 읽기) 맨 앞에 그대로 덧붙는 옵션입니다.\n"
+            "Writer 가 상황에 따라 붙이는 옵션(--syncinfo, --default, -o, --inherit-meta, --external 등)은 그대로이고, "
+            "같은 옵션이 겹치면 Writer 쪽이 뒤에 와서 이깁니다.\n"
+            "공백이 든 값은 따옴표로 묶으세요. 상대 경로는 원고가 있는 폴더 기준입니다.\n"
+            "실제로 필요한 건 대개 --encoding 과 --config 정도입니다. 잘못 쓰면 모든 변환이 실패하니 비워서 확인하세요.")
+        form.addRow("ndhmd4tex 옵션", self.n4t_args)
+
         self.inherit_meta = QCheckBox("'이 파일만' 변환·컴파일 때 책 최상위 원고의 헤더를 가져와 쓴다 (--inherit-meta)")
         self.inherit_meta.setChecked(self.prefs.inherit_meta())
         self.inherit_meta.setToolTip(
@@ -7084,6 +7103,7 @@ class PreferencesDialog(QDialog):
             external_always=self.external_always.isChecked(),
             bibharvest_always=self.bibharvest_always.isChecked(),
             inherit_meta=self.inherit_meta.isChecked(),
+            ndhmd4tex_args=self.n4t_args.text().strip(),
         )
         JigsawFigure.use_kinds(jigsaw_kinds(self.jig_kinds.toPlainText()))
         apply_extra_path(self.extra_path.toPlainText())
@@ -14002,7 +14022,7 @@ def book_dump_meta(win: "MainWindow", root: Path) -> dict:
             tmp = root.with_name(".~ndhmdWriter-page-tmp" + root.suffix)
             tmp.write_text(win.editor.toPlainText(), encoding="utf-8")
             target = tmp
-        cmd = win.tool.command(["--dump-meta", str(target)])
+        cmd = win.tool_cmd(["--dump-meta", str(target)])
         if cmd is None:
             return {}
         r = subprocess.run(cmd, cwd=str(root.parent), capture_output=True, timeout=30,
@@ -21320,7 +21340,7 @@ class MainWindow(QMainWindow):
             return
 
         target = LabelIndex.book_files(self.index, self._path)[0]
-        cmd = self.tool.command(["--lint", str(target)])
+        cmd = self.tool_cmd(["--lint", str(target)])
         if cmd is None:
             return
 
@@ -21553,7 +21573,7 @@ class MainWindow(QMainWindow):
             return
 
         target = LabelIndex.book_files(self.index, self._path)[0]
-        cmd = self.tool.command(["--dump-meta", "--dump-mapping", str(target)])
+        cmd = self.tool_cmd(["--dump-meta", "--dump-mapping", str(target)])
         if cmd is None:
             return
 
@@ -21596,6 +21616,14 @@ class MainWindow(QMainWindow):
 
     #: ndhmd2html 이 biber 형식 .bbl 의 문헌 목록을 못 만들었거나(thebib.tex 없음) 낡았다고 알릴 때의 문구.
     _BIBHARVEST_NEEDED_RE = re.compile(r"biber 형식이라 바로 읽을 수 없습니다|-thebib\.tex 이\(가\).*오래됐습니다")
+
+    def tool_cmd(self, args: list):
+        """ndhmd4tex 명령. 환경설정의 추가 옵션을 맨 앞에 붙이고, Writer 의 옵션을 뒤에 둔다(겹치면 Writer 가 이긴다)."""
+        try:
+            extra = split_cli_args(self.prefs.ndhmd4tex_args())
+        except ValueError:
+            extra = []
+        return self.tool.command([*extra, *args])
 
     def inherit_args(self, target: Path) -> list:
         """환경설정이 켜져 있고 target 이 책의 하위 파일이면 최상위 원고를 --inherit-meta 로 넘긴다."""
@@ -21802,7 +21830,7 @@ class MainWindow(QMainWindow):
         self._start_convert(target)
 
     def _start_convert(self, target: Path, external: bool = False):
-        cmd = self.tool.command(["--syncinfo", *self.animation_args(), *self.inherit_args(target),
+        cmd = self.tool_cmd(["--syncinfo", *self.animation_args(), *self.inherit_args(target),
                                  *self.external_args(external), str(target)])
         if cmd is None:
             return
@@ -22257,7 +22285,7 @@ class MainWindow(QMainWindow):
                     *self.animation_args(), *self.external_args(external), str(target)]
         else:
             args = [*self.animation_args(), *self.external_args(external), str(target)]
-        cmd = self.tool.command(args)
+        cmd = self.tool_cmd(args)
         if cmd is None:
             return
 

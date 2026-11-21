@@ -1,6 +1,6 @@
 ---
 title: ndhmdWriter 사용자 설명서 (참조편) — 초고
-author: ndhmdWriter 0.13.3 기준
+author: ndhmdWriter 0.13.6 기준
 toplevel: chapter
 setup: [articlelike.nmd,defaultnoto.nmd]
 classoption+: chapter
@@ -1285,6 +1285,7 @@ ndhmd4tex 0.22부터 원고에 ` ```external tool=도구이름, caption=…, lab
 - 다루는 명령은 `\setmainfont`·`\setsansfont`·`\setmonofont`와 한글·한자 짝(`\setmainhangulfont` 등)뿐이다. `\newfontfamily`·`\fontspec` 계열은 Writer 모드에서 빠진다.
 - 열기 전에 preamble(setup 파일 포함)에 이미 같은 전역 선언이 있으면 알린다. 우리 블록이 뒤에 와서 같은 계열을 덮어쓴다.
 - 도구는 밖에서 단독으로도 돌릴 수 있다(`font.py --out 결과.json --scripts latin|all --engine xelatex|lualatex --class 클래스 --state 이전.json`).
+- 창은 `Writer로 보내기`를 누르면 닫히고, `Ctrl+W`(맥은 ⌘W)를 누르면 보내지 않고 닫는다(0.13.6). 보내지 않고 닫으면 원고는 그대로다.
 
 ## 셸 명령 실행과 tblrDoumi {#sec:shell}
 
@@ -1401,6 +1402,8 @@ ndhmd4tex 0.22부터 원고에 ` ```external tool=도구이름, caption=…, lab
 
 - **본문만 tex 변환**(0.13.1, `컴파일 ▶ 본문만 tex 변환`)은 지금 연 파일을 `ndhmd4tex --default NONE`으로 변환해 `이름-body.tex`로 남긴다. front matter와 프리앰블 없이 pandoc이 만든 본문 LaTeX 조각 그대로이며, 컴파일은 하지 않는다. 컴파일용 `이름.tex`를 덮어쓰지 않고, `작업공간 청소`로도 지워지지 않는다. 문서 구조(class·preamble·title 등)는 쓰지 않지만 `mapping:`·`mappingrule:`·`toplevel:` 같은 마크업 번역 규칙은 `--default NONE`에서도 적용된다. 그래서 `환경설정 ▶ 이 파일만 ▶ 최상위 헤더 가져오기`가 켜져 있으면 최상위 원고의 규칙을 가져와 변환한다.
 - **최상위 헤더 가져오기**(0.13.0, `환경설정 ▶ 이 파일만`, 기본 **꺼짐**). 켜면 책의 하위 파일을 `이 파일만 컴파일`·`이 파일만 HTML로 변환`할 때 최상위 원고를 `--inherit-meta`로 변환기에 넘긴다. 최상위의 front matter(class, classoption, preamble, setup, `쪽 설정`·`문서 글꼴` 블록 포함)를 최상위를 변환할 때와 똑같이 해석해 쓰고, 그 파일 자신의 front matter는 버린다. 단독 컴파일에 맞지 않는 `title`·`subtitle`·`author`·`date`·`maketitle`·`tocloft`는 가져오지 않으므로 표지·목차는 생기지 않는다. 본문과 줄 번호는 그 파일 그대로라서 `.nmdsync`의 소스 파일·줄(앞뒤 검색)은 켜고 끌 때 같다(tex 쪽 줄만 헤더 길이만큼 달라진다). 최상위와 하위 파일의 폴더가 다르면 상속한 헤더의 상대 경로(`.bib`, `\input` 등)는 컴파일하는 폴더 기준으로 찾는다는 경고가 나온다. 책이 아닌 단독 원고와 책 전체 변환에는 영향이 없다. ndhmd4tex 0.25.0, ndhmd2html 0.6.0 이상이 필요하다.
+
+- **ndhmd4tex 옵션**(0.13.5, `환경설정 ▶ 컴파일·도구`). 한 줄로 적은 옵션이 ndhmd4tex를 부르는 모든 명령(컴파일·변환·점검·메타 읽기) 맨 앞에 그대로 덧붙는다. Writer가 상황에 따라 붙이는 옵션(`--syncinfo`, `--default`, `-o`, `--inherit-meta`, `--external` 등)은 그대로이고, 같은 옵션이 겹치면 뒤에 오는 Writer 쪽이 이긴다. 현실적으로 필요한 건 `--encoding`(원고가 UTF-8이 아닐 때)과 `--config`(매핑 파일) 정도다. 공백이 든 값은 따옴표로 묶고, 상대 경로는 원고가 있는 폴더 기준이다. 잘못 적으면 모든 변환이 실패하니 의심되면 비워 본다. ndhmd2html과 `--guide`에는 붙지 않는다.
 
 ## 변환·덤프·.tex 열기 {#sec:convert}
 

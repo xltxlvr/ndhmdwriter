@@ -70,7 +70,7 @@ DEFAULT_CLASS = "article"
 LUATEXKO_ONLY_OPTIONS = ("CompressPunctuations",)
 PREVIEW_DELAY_MS = 700                      # 입력이 멈춘 뒤 컴파일 (타이핑 중 컴파일 방지)
 PREVIEW_TIMEOUT_S = 180                     # lualatex 는 처음에 폰트 캐시를 만드느라 오래 걸릴 수 있다
-VERSION = "1.1"                             # 이 도구의 버전 (styler 전체 버전과 따로)
+VERSION = "1.1.1"                             # 이 도구의 버전 (styler 전체 버전과 따로)
 CACHE_VERSION = 4                           # 캐시 형식이 바뀌면 올린다 (2: ttc/otc 포함, 3: 서체 번호 추가)
 import logging
 logging.getLogger("fontTools").setLevel(logging.ERROR)    # "skipping malformed name record" 같은 경고가 터미널을 덮지 않게
@@ -970,6 +970,10 @@ class FontPage(QWidget):
             self.send_btn.setDefault(True)
             self.send_btn.clicked.connect(self.send_to_writer)
             ol.addWidget(self.send_btn)
+            # Ctrl+W(맥은 ⌘W) — 보내지 않고 그냥 닫는다. 보내지 않았으니 Writer 는 아무것도 바꾸지 않는다.
+            from PySide6.QtGui import QShortcut, QKeySequence
+            self._close_sc = QShortcut(QKeySequence("Ctrl+W"), self)
+            self._close_sc.activated.connect(self.close)
         self.status_label = QLabel("")
         self.status_label.setEnabled(False)
         ol.addWidget(self.status_label)
