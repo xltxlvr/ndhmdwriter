@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.13.7"
+__version__ = "0.14.6"
 
 from contextlib import contextmanager
 
@@ -46,6 +46,7 @@ import subprocess
 import sys
 import html as _html
 import tempfile
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -6397,6 +6398,14 @@ class Prefs:
         """```external 블록의 외부 도구 실행(--external)을 묻지 않고 늘 허용할지. 기본은 끔."""
         return self.s.value("prefs/external_always", False, type=bool)
 
+    def tspv_delay(self) -> float:
+        """조판 미리보기가 입력이 멈춘 뒤 갱신을 시작하기까지의 시간(초). 1.0~5.0, 기본 1.2."""
+        return max(1.0, min(5.0, self.s.value("prefs/tspv_delay", 1.2, type=float)))
+
+    def tspv_context(self) -> int:
+        """조판 미리보기가 커서 블록의 앞뒤로 함께 그릴 블록 수(`--context`). 기본 1."""
+        return max(0, min(10, self.s.value("prefs/tspv_context", 1, type=int)))
+
     def ndhmd4tex_args(self) -> str:
         """환경설정에 적은 ndhmd4tex 추가 옵션(한 줄). 컴파일·변환·점검 명령 맨 앞에 덧붙는다."""
         return str(self.s.value("prefs/ndhmd4tex_args", "") or "").strip()
@@ -6942,6 +6951,26 @@ class PreferencesDialog(QDialog):
             "실제로 필요한 건 대개 --encoding 과 --config 정도입니다. 잘못 쓰면 모든 변환이 실패하니 비워서 확인하세요.")
         form.addRow("ndhmd4tex 옵션", self.n4t_args)
 
+        self.tspv_ctx = QSpinBox()
+        self.tspv_ctx.setRange(0, 10)
+        self.tspv_ctx.setSuffix(" 블록")
+        self.tspv_ctx.setValue(self.prefs.tspv_context())
+        self.tspv_ctx.setToolTip(
+            "조판 미리보기(F6)가 커서가 있는 블록의 앞뒤로 함께 그릴 블록 수 — ndhmd4tex 의 --context 입니다.\n"
+            "기본 1. 늘리면 문맥이 넓어지지만 컴파일이 조금 느려집니다. 패널 안의 '앞뒤' 칸과 같은 값입니다.")
+        form.addRow("조판 미리보기 --context", self.tspv_ctx)
+
+        self.tspv_delay = QDoubleSpinBox()
+        self.tspv_delay.setRange(1.0, 5.0)
+        self.tspv_delay.setSingleStep(0.1)
+        self.tspv_delay.setDecimals(1)
+        self.tspv_delay.setSuffix(" 초")
+        self.tspv_delay.setValue(self.prefs.tspv_delay())
+        self.tspv_delay.setToolTip(
+            "조판 미리보기(F6)의 '자동'이 켜져 있을 때, 입력(또는 다른 문단으로 커서 이동)이 멈춘 뒤 갱신을 시작하기까지 기다리는 시간입니다.\n"
+            "1초 이상, 기본 1.2초. 여기에 변환·컴파일 시간이 더해집니다.")
+        form.addRow("조판 미리보기 대기", self.tspv_delay)
+
         self.inherit_meta = QCheckBox("'이 파일만' 변환·컴파일 때 책 최상위 원고의 헤더를 가져와 쓴다 (--inherit-meta)")
         self.inherit_meta.setChecked(self.prefs.inherit_meta())
         self.inherit_meta.setToolTip(
@@ -7104,7 +7133,10 @@ class PreferencesDialog(QDialog):
             bibharvest_always=self.bibharvest_always.isChecked(),
             inherit_meta=self.inherit_meta.isChecked(),
             ndhmd4tex_args=self.n4t_args.text().strip(),
+            tspv_context=self.tspv_ctx.value(),
+            tspv_delay=self.tspv_delay.value(),
         )
+        self._win.tspv.set_context(self.prefs.tspv_context())
         JigsawFigure.use_kinds(jigsaw_kinds(self.jig_kinds.toPlainText()))
         apply_extra_path(self.extra_path.toPlainText())
         self._win.apply_preferences()
@@ -14993,6 +15025,7 @@ SHORTCUT_GROUPS = (
         ("프론트매터 접기", "Ctrl+Shift+Y"),
         ("코드 펜스·`:::{환경}` 접기/펴기(커서 위치)", "Ctrl+Alt+Shift+H"),
         ("전체화면", "F11"),
+        ("조판 미리보기 열기·닫기 / 지금 갱신", "F6 / Shift+F6"),
     )),
     ("도구", (
         ("보조 입력(라틴 확장·문장부호·IPA)", "Ctrl+Alt+A"),
@@ -15053,7 +15086,7 @@ class HelpDialog(QDialog):
         html = f"""
         <h2 style="margin-bottom:2px">ndhmdWriter</h2>
         <div style="color:#7a7368">버전 {__version__}</div>
-        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.25.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
+        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex ≥ 0.26.5, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>
         <p>
         지은이: {APP_AUTHOR}<br>
         라이선스: {APP_LICENSE}
@@ -16423,6 +16456,378 @@ class ConsoleOutputDialog(QDialog):
 # ===========================================================================
 # 10. 창
 # ===========================================================================
+
+class TypesetPreview(QWidget):
+    """조판 미리보기 — 커서가 있는 자리의 앞뒤 몇 블록만 TeX 로 약식 조판해 그린다(`ndhmd4tex --preview-at`).
+
+    입력이 멈추면(1.2초) 변환 → 컴파일 → 그림 순서로 한 번 돌고, 새 입력이 들어오면 돌던 것을 버리고 다시 시작한다.
+    새 그림이 나올 때까지 이전 그림을 그대로 둔다. 쪽 나눔·번호·상호참조는 정확하지 않다 — 정확한 결과는 늘 컴파일이 만든다.
+    TeX 는 Python 스레드 안의 subprocess 로 돌려 Windows 에서 콘솔 창이 깜빡이지 않게 한다.
+    """
+
+    TIMEOUT = 90
+    _done = Signal(object)
+
+    def __init__(self, win: "MainWindow"):
+        super().__init__(win)
+        self._win = win
+        self._work: Path | None = None
+        self._gen = 0
+        self._popen = None
+        self._busy = False
+        self._shown: Path | None = None
+        self._para_key = None
+        self._last_key = None
+        self._ks_base = None
+        self._note = ""
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._run)
+        self._rerender = QTimer(self)
+        self._rerender.setSingleShot(True)
+        self._rerender.setInterval(150)
+        self._rerender.timeout.connect(self._render)
+        self._done.connect(self._finished)
+
+        title = QLabel("조판 미리보기")
+        title.setStyleSheet("font-weight: bold;")
+        self.status = QLabel("")
+        self.status.setStyleSheet(dim_label_css(self.status))
+        self.status.setWordWrap(True)
+        self.auto = QCheckBox("자동")
+        self.auto.setToolTip("입력을 멈추면 알아서 갱신합니다. 끄면 [⟳]이나 Shift+F6 으로만 갱신합니다.")
+        self.auto.setChecked(win.prefs.s.value("prefs/tspv_auto", True, type=bool))
+        self.auto.toggled.connect(lambda on: win.prefs.s.setValue("prefs/tspv_auto", on))
+        self.ctx = QSpinBox()
+        self.ctx.setRange(0, 10)
+        self.ctx.setPrefix("앞뒤 ")
+        self.ctx.setSuffix(" 블록")
+        self.ctx.setToolTip("커서가 있는 블록(문단·목록·표 등)의 앞뒤로 함께 그릴 블록 수")
+        self.ctx.setValue(win.prefs.tspv_context())
+        self.ctx.valueChanged.connect(self._ctx_changed)
+        self.zoom = QComboBox()
+        for label, pct in (("폭 맞춤", 0), ("100%", 100), ("150%", 150), ("200%", 200), ("300%", 300)):
+            self.zoom.addItem(label, pct)
+        self.zoom.setToolTip("폭 맞춤: 쪽 폭을 패널 폭에 맞춥니다(패널이 좁으면 글자가 작습니다).\n"
+                             "100%: 종이에 인쇄한 실제 크기(96dpi 화면 기준). 150%·200%·300%는 그 배율이며 넘치면 가로로 스크롤됩니다.")
+        k = self.zoom.findData(win.prefs.s.value("prefs/tspv_zoom_pct", 0, type=int))
+        self.zoom.setCurrentIndex(max(0, k))
+        self.zoom.currentIndexChanged.connect(self._zoom_changed)
+        self.refresh_btn = QToolButton()
+        self.refresh_btn.setText("⟳")
+        self.refresh_btn.setToolTip("지금 갱신 (Shift+F6)")
+        self.refresh_btn.clicked.connect(self.refresh_now)
+        self.float_btn = QToolButton()
+        self.float_btn.setText("⧉")
+        self.float_btn.setToolTip("떼어내기 — 따로 떠다니는 창으로")
+        self.float_btn.clicked.connect(lambda: win.toggle_float_tspv())
+        self.close_btn = QToolButton()
+        self.close_btn.setText("✕")
+        self.close_btn.setToolTip("닫기 (F6)")
+        self.close_btn.clicked.connect(lambda: win._set_tspv_visible(False))
+
+        row1 = QHBoxLayout()
+        row1.addWidget(title)
+        row1.addStretch(1)
+        row1.addWidget(self.refresh_btn)
+        row1.addWidget(self.float_btn)
+        row1.addWidget(self.close_btn)
+        row2 = QHBoxLayout()
+        row2.addWidget(self.auto)
+        row2.addWidget(self.ctx)
+        row2.addWidget(self.zoom)
+        row2.addStretch(1)
+
+        self.image = QLabel("커서가 있는 자리를 약식으로 조판해 보여 줍니다.")
+        self.image.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        self.image.setStyleSheet("background: #7a7a7a; color: #eee; padding: 8px;")
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(False)
+        self.scroll.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        self.scroll.setWidget(self.image)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(4)
+        lay.addLayout(row1)
+        lay.addLayout(row2)
+        lay.addWidget(self.status)
+        lay.addWidget(self.scroll, 1)
+        self.setMinimumWidth(240)
+
+    def sizeHint(self):
+        return QSize(380, 600)
+
+    # -- 언제 도는가 ---------------------------------------------------------------
+
+    def _active(self) -> bool:
+        return self.isVisible() and self.auto.isChecked()
+
+    def _para_now(self):
+        """커서가 든 문단(빈 줄로 나뉜 덩어리)의 첫 블록 번호 — 같은 문단 안의 커서 이동에는 다시 그리지 않는다."""
+        ed = self._win.editor
+        b = ed.textCursor().block()
+        while b.previous().isValid() and b.previous().text().strip():
+            b = b.previous()
+        return (str(self._win._path), b.blockNumber())
+
+    def note_edit(self):
+        if not self._active():
+            return
+        self._para_key = self._para_now()
+        self.status.setText("입력 대기 중…")
+        self._timer.start(int(self._win.prefs.tspv_delay() * 1000))
+
+    def note_cursor(self):
+        if not self._active():
+            return
+        key = self._para_now()
+        if key == self._para_key:
+            return
+        self._para_key = key
+        self._timer.start(int(self._win.prefs.tspv_delay() * 1000))
+
+    def shown(self):
+        """패널이 열렸다 — 바로 한 번 그린다."""
+        self._para_key = self._para_now() if self._win._path else None
+        self._timer.start(50)
+
+    def refresh_now(self):
+        self._timer.stop()
+        self._run(force=True)
+
+    def set_context(self, n: int):
+        """환경설정에서 바뀐 값을 패널의 칸에 반영한다(값이 같으면 아무 것도 하지 않는다)."""
+        if self.ctx.value() != n:
+            self.ctx.setValue(n)
+
+    def _zoom_changed(self, _i=0):
+        self._win.prefs.s.setValue("prefs/tspv_zoom_pct", int(self.zoom.currentData()))
+        self._render()
+
+    def _ctx_changed(self, v):
+        self._win.prefs.s.setValue("prefs/tspv_context", int(v))
+        if self.isVisible():
+            self._timer.start(300)
+
+    # -- 한 번 돌리기 --------------------------------------------------------------
+
+    def _abort(self):
+        self._gen += 1
+        p = self._popen
+        if p is not None and p.poll() is None:
+            try:
+                p.kill()
+            except OSError:
+                pass
+
+    def _run(self, force: bool = False):
+        win = self._win
+        path = win._path
+        if path is None:
+            self.status.setText("원고를 먼저 저장하거나 열어 주세요.")
+            return
+        text = win.editor.toPlainText()
+        line = win.editor.file_line()
+        n = self.ctx.value()
+        engine = win.prefs.tex_engine()
+        key = (str(path), text, line, n, engine, win.prefs.compiler_backend())
+        if not force and key == self._last_key and self._shown is not None:
+            self.status.setText(self._note)
+            return
+        backend = win.prefs.compiler_backend()
+        latex_head = None
+        if backend == "ksruncltex":
+            # 컴파일러가 ksruncltex 면 그것으로 돌리되, 미리보기는 한 번만 컴파일한다(--max-iterations=1).
+            base = self._ks_base or win._locate_ksruncltex()
+            if base is None:
+                self.status.setText("ksruncltex 를 찾지 못했습니다. texlua/kpsewhich 와 설치, 환경설정의 ndhmd PATH 를 확인하세요.")
+                return
+            self._ks_base = base
+            try:
+                raw = Preamble.meta(win.index, path, win._live_reader).get("compileoption", "")
+                opts = shlex.split(raw) if isinstance(raw, str) and raw.strip() else []
+            except (ValueError, OSError):
+                opts = []
+            latex_head = [*base, KSRUNCLTEX_ENGINE_FLAG.get(engine, "--xelatex"), *opts, "--max-iterations=1"]
+        else:
+            exe = shutil.which(engine)
+            if exe is None:
+                self.status.setText(f"{engine} 을(를) 찾지 못했습니다. TeX 설치와 환경설정의 ndhmd PATH 를 확인하세요.")
+                return
+        try:
+            root = LabelIndex.book_files(win.index, path)[0]
+        except (IndexError, KeyError):
+            root = path
+        if self._work is None:
+            self._work = Path(tempfile.mkdtemp(prefix="ndhmd-tspv-"))
+        tmp_md = path.with_name(".~ndhmdWriter-tspv" + (path.suffix or ".md"))
+        try:
+            tmp_md.write_text(text, encoding="utf-8")
+        except OSError as e:
+            self.status.setText(f"임시 파일을 쓰지 못했습니다: {e}")
+            return
+        args = ["--preview-at", str(line), "--context", str(n), "-o", str(self._work / "pv.tex")]
+        if root != path:                 # 장 파일이면 최상위 헤더를 가져와 책과 같은 모양으로 그린다
+            args += ["--inherit-meta", str(root)]
+        args += win.external_args(False) + [str(tmp_md)]
+        cmd4 = win.tool_cmd(args)
+        if cmd4 is None:
+            tmp_md.unlink(missing_ok=True)
+            self.status.setText("ndhmd4tex 를 찾지 못했습니다.")
+            return
+        if latex_head is not None:
+            latex = [*latex_head, f"--output-directory={self._work}", "--jobname=pv", str(self._work / "pv.tex")]
+        else:
+            latex = [exe, "-interaction=nonstopmode", "-output-directory", str(self._work), "-jobname", "pv",
+                     str(self._work / "pv.tex")]
+        self._abort()
+        gen = self._gen
+        self._last_key = key
+        self._busy = True
+        self.status.setText("그리는 중…")
+        threading.Thread(target=self._work_thread,
+                         args=(gen, tmp_md, cmd4, latex, path.parent, self._work), daemon=True).start()
+
+    def _exec(self, cmd, cwd):
+        p = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+        self._popen = p
+        try:
+            out, _ = p.communicate(timeout=self.TIMEOUT)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            out, _ = p.communicate()
+            return -9, decode_subprocess_output(out or b"") + "\n(시간 초과)"
+        return p.returncode, decode_subprocess_output(out or b"")
+
+    def _work_thread(self, gen, tmp_md: Path, cmd4, latex, cwd: Path, work: Path):
+        t0 = time.monotonic()
+        res = {"gen": gen, "ok": False, "msg": "", "pdf": None, "warn": ""}
+        try:
+            try:
+                rc, out = self._exec(cmd4, cwd)
+            finally:
+                try:
+                    tmp_md.unlink()
+                except OSError:
+                    pass
+            if gen != self._gen:
+                return
+            if rc != 0:
+                errs = [l for l in out.splitlines() if "오류" in l or "rror" in l] or out.strip().splitlines()[-1:]
+                res["msg"] = "변환 실패: " + " / ".join(l.replace("[ndhmd] ", "").strip() for l in errs[:2])
+                return
+            note = next((l.replace("[ndhmd] ", "").strip() for l in out.splitlines() if "미리보기:" in l), "")
+            t_conv = time.monotonic() - t0
+            for name in ("pv.pdf", "pv.log", "pv.aux"):
+                (work / name).unlink(missing_ok=True)
+            rc2, _out2 = self._exec(latex, cwd)
+            if gen != self._gen:
+                return
+            pdf = work / "pv.pdf"
+            if rc2 != 0 or not pdf.is_file():
+                log = ""
+                try:
+                    log = (work / "pv.log").read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    pass
+                m = re.search(r"^!.*\n(?:.*\n)*?(l\.\d+.*)$", log, re.M)
+                first = next((l for l in log.splitlines() if l.startswith("!")), "")
+                res["warn"] = (first + ("  " + m.group(1) if m else "")).strip() or "TeX 오류"
+            if pdf.is_file():
+                shown = work / f"shown{gen}.pdf"
+                shutil.copyfile(pdf, shown)
+                res.update(ok=True, pdf=shown)
+                t_all = time.monotonic() - t0
+                res["msg"] = f"{note}  ·  변환 {t_conv:.1f}초 + TeX {t_all - t_conv:.1f}초 = {t_all:.1f}초"
+            else:
+                res["msg"] = "컴파일 실패: " + (res["warn"] or "PDF 가 만들어지지 않았습니다")
+                res["warn"] = ""
+        except OSError as e:
+            res["msg"] = f"실행 실패: {e}"
+        finally:
+            self._done.emit(res)
+
+    def _finished(self, res):
+        if res["gen"] != self._gen:
+            return                      # 그 사이에 새 요청이 왔다 — 버린다
+        self._busy = False
+        if res["ok"]:
+            old = self._shown
+            self._shown = res["pdf"]
+            self._note = res["msg"] + ("   ⚠ " + res["warn"] if res["warn"] else "")
+            self.status.setText(self._note)
+            self._render()
+            if old is not None and old != self._shown:
+                old.unlink(missing_ok=True)
+        else:
+            self.status.setText(res["msg"] or "실패")
+
+    # -- 그리기 --------------------------------------------------------------------
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if self._shown is not None:
+            self._rerender.start()
+
+    def _render(self):
+        if self._shown is None or not self._shown.is_file():
+            return
+        try:
+            from PySide6.QtPdf import QPdfDocument
+        except ImportError as e:
+            self.status.setText(f"QtPdf 를 불러오지 못했습니다 ({e})")
+            return
+        doc = QPdfDocument(self)
+        if doc.load(str(self._shown)) != QPdfDocument.Error.None_:
+            self.status.setText("PDF 를 열지 못했습니다")
+            return
+        try:
+            dpr = self.devicePixelRatioF()
+            pct = int(self.zoom.currentData() or 0)
+            fit = max(120, self.scroll.viewport().width() - 20)
+            shots, gap = [], int(10 * dpr)
+            pw = 0
+            for i in range(min(doc.pageCount(), 2)):
+                sz = doc.pagePointSize(i)
+                if sz.width() <= 0:
+                    continue
+                # 100% = 실제 인쇄 크기(1pt = 96/72 화면 픽셀). 폭 맞춤은 패널 폭.
+                pw = int((fit if pct == 0 else sz.width() * 96 / 72 * pct / 100) * dpr)
+                ph = int(pw * sz.height() / sz.width())
+                img = doc.render(i, QSize(pw, ph))
+                page = QImage(pw, ph, QImage.Format_ARGB32_Premultiplied)
+                page.fill(Qt.white)
+                painter = QPainter(page)
+                painter.drawImage(0, 0, img)
+                painter.end()
+                shots.append(page)
+            if not shots:
+                return
+            sheet = QPixmap(max(s.width() for s in shots), sum(s.height() for s in shots) + gap * (len(shots) - 1))
+            sheet.fill(QColor("#7a7a7a"))
+            painter = QPainter(sheet)
+            y = 0
+            for s in shots:
+                painter.drawImage(0, y, s)
+                y += s.height() + gap
+            painter.end()
+            sheet.setDevicePixelRatio(dpr)
+            self.image.setPixmap(sheet)
+            self.image.adjustSize()
+        finally:
+            doc.close()
+
+    def shutdown(self):
+        self._timer.stop()
+        self._abort()
+        self._shown = None
+        self._last_key = None
+        if self._work is not None:
+            shutil.rmtree(self._work, ignore_errors=True)
+            self._work = None
+
 
 class FloatingPanelWindow(QWidget):
     """오른쪽 날개(라벨 날개·TOC)를 떼어내서 띄우는 창.
@@ -18458,9 +18863,12 @@ class MainWindow(QMainWindow):
         #: 떼어내서 떠다니는 중인 날개들 — {"wing"|"toc": FloatingPanelWindow}
         self._floating = {}
         self.splitter.addWidget(self.wing_box)
+        self.tspv = TypesetPreview(self)
+        self.splitter.addWidget(self.tspv)
+        self.tspv.hide()
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setCollapsible(1, False)
-        self.splitter.setSizes([230, 720, 250])
+        self.splitter.setSizes([230, 720, 250, 0])
         self.setCentralWidget(self.splitter)
 
         self._build_menu()
@@ -18470,6 +18878,8 @@ class MainWindow(QMainWindow):
         self.editor.cursorPositionChanged.connect(self._schedule_preview)
         self.editor.cursorPositionChanged.connect(self._schedule_auto_preview)
         self.editor.textChanged.connect(self._mark_dirty)
+        self.editor.textChanged.connect(self.tspv.note_edit)
+        self.editor.cursorPositionChanged.connect(self.tspv.note_cursor)
 
         self.resize(1200, 820)
         self._restore_panes()
@@ -18480,6 +18890,7 @@ class MainWindow(QMainWindow):
         self._sync_wing_pane_visibility()
         self._ensure_pane(2)
         QTimer.singleShot(0, self._restore_floating)
+        QTimer.singleShot(0, self._restore_tspv)
         self.preview.setVisible(self._act_preview.isChecked())
         self._restore_vsplit()
         self._update_title()
@@ -18675,6 +19086,13 @@ class MainWindow(QMainWindow):
             self._settings.value("view/preview", True, type=bool))
         self._act_preview.triggered.connect(self.toggle_preview)
         m.addAction(self._act_preview)
+        self._act_tspv = QAction("조판 미리보기(&T)", self, checkable=True)
+        self._act_tspv.setShortcut("F6")
+        self._act_tspv.setToolTip("커서 자리의 앞뒤 몇 블록을 TeX 로 약식 조판해 오른쪽에 보여 줍니다(ndhmd4tex --preview-at).")
+        self._act_tspv.setChecked(self._settings.value("view/tspv", False, type=bool))
+        self._act_tspv.triggered.connect(self._set_tspv_visible)
+        m.addAction(self._act_tspv)
+        act(m, "조판 미리보기 지금 갱신", "Shift+F6", self._tspv_refresh)
         m.addSeparator()
         self._act_fold = QAction("프론트매터 접기(&Y)", self, checkable=True)
         self._act_fold.setShortcut("Ctrl+Shift+Y")
@@ -20574,6 +20992,82 @@ class MainWindow(QMainWindow):
         docked_toc = "toc" not in self._floating and not self.toc.isHidden()
         self.wing_box.setVisible(docked_wing or docked_toc)
 
+    # -- 조판 미리보기 -----------------------------------------------------------
+
+    def _tspv_refresh(self):
+        if not self._act_tspv.isChecked():
+            self._act_tspv.setChecked(True)
+            self._set_tspv_visible(True)
+            return
+        self.tspv.refresh_now()
+
+    def _set_tspv_visible(self, on: bool):
+        """[보기 ▶ 조판 미리보기]·패널의 [✕]. 떠 있으면 그 창이, 붙어 있으면 오른쪽 칸이 열리고 닫힌다."""
+        self._act_tspv.setChecked(bool(on))
+        self._settings.setValue("view/tspv", bool(on))
+        win = self._floating.get("tspv")
+        if win is not None:
+            win.setVisible(on)
+        else:
+            if not on:
+                self._remember_pane(3)
+            self.tspv.setVisible(on)
+            if on:
+                self._ensure_pane(3)
+        if on:
+            self.tspv.shown()
+        else:
+            self.tspv.shutdown()
+            self.editor.setFocus()
+
+    def toggle_float_tspv(self):
+        if "tspv" in self._floating:
+            self.dock_tspv()
+        else:
+            self.float_tspv()
+
+    def float_tspv(self):
+        if "tspv" in self._floating:
+            return
+        self._remember_pane(3)
+        win = FloatingPanelWindow(self, "tspv", self.tspv, "조판 미리보기")
+        self._floating["tspv"] = win
+        self.tspv.float_btn.setText("⊡")
+        self.tspv.float_btn.setToolTip("붙이기 — 원래 자리(오른쪽 칸)로")
+        self.tspv.setVisible(True)
+        geom = self._settings.value("view/tspv_float_geom")
+        if geom is None or not win.restoreGeometry(geom):
+            win.resize(420, 640)
+            g = self.geometry()
+            win.move(g.right() - 440, g.top() + 60)
+        self._settings.setValue("view/tspv_floating", True)
+        win.setVisible(self._act_tspv.isChecked())
+
+    def dock_tspv(self):
+        win = self._floating.pop("tspv", None)
+        if win is None:
+            return
+        self._settings.setValue("view/tspv_float_geom", win.saveGeometry())
+        self._settings.setValue("view/tspv_floating", False)
+        win.layout().removeWidget(self.tspv)
+        self.splitter.addWidget(self.tspv)
+        self.tspv.float_btn.setText("⧉")
+        self.tspv.float_btn.setToolTip("떼어내기 — 따로 떠다니는 창으로")
+        self.tspv.setVisible(self._act_tspv.isChecked())
+        win.hide()
+        win.deleteLater()
+        if self._act_tspv.isChecked():
+            self._ensure_pane(3)
+
+    def _restore_tspv(self):
+        if self._act_tspv.isChecked():
+            if self._settings.value("view/tspv_floating", False, type=bool):
+                self.float_tspv()
+            else:
+                self.tspv.setVisible(True)
+                self._ensure_pane(3)
+            self.tspv.shown()
+
     def toggle_wing(self, on: bool):
         if not on:
             self._remember_pane(2)
@@ -20670,6 +21164,9 @@ class MainWindow(QMainWindow):
     def _on_floating_closed(self, key: str):
         """떠 있는 창의 [x] — 패널의 [✕] 와 같다(메뉴 체크 해제). 떠 있다는
         상태는 그대로 두어서, 다음에 다시 열면 같은 자리에 뜬다."""
+        if key == "tspv":
+            self._set_tspv_visible(False)
+            return
         act = self._act_wing if key == "wing" else self._act_toc
         act.setChecked(False)
         (self.toggle_wing if key == "wing" else self.toggle_toc)(False)
@@ -22802,6 +23299,7 @@ class MainWindow(QMainWindow):
         self._settings.setValue(
             "view/vsplit", [int(x) for x in self.vsplit.sizes()])
         shutil.rmtree(self._render_dir, ignore_errors=True)
+        self.tspv.shutdown()
         event.accept()
 
     # -- 찾기: 공통 ---------------------------------------------------------
@@ -25976,6 +26474,8 @@ _EN = {
     '사양서(&S)': 'Specification(&S)',
     '쪽 설정(&G)…': 'Page setup(&G)…',
     '문서 글꼴(&F)…': 'Document font(&F)…',
+    '조판 미리보기(&T)': 'Typeset preview(&T)',
+    '조판 미리보기 지금 갱신': 'Refresh typeset preview now',
     '사양서 (pdf)(&S)': 'Specification (pdf)(&S)',
     '사양서 (web)(&E)': 'Specification (web)(&E)',
     '치트시트(&C)': 'Cheat sheet(&C)',
@@ -26658,7 +27158,7 @@ _EN = {
     'English': 'English',
     '언어 / Language': 'Language',
     '언어 / Language(&L)': 'Language(&L)',
-    '\n        <h2 style="margin-bottom:2px">ndhmdWriter</h2>\n        <div style="color:#7a7368">버전 {}</div>\n        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.20.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>\n        <p>\n        지은이: {}<br>\n        라이선스: {}\n        </p>\n        <p style="color:#7a7368; font-size:11px">\n        MIT 라이선스로 배포하기 위해 PySide6를 사용했습니다.\n        </p>\n        <p style="color:#7a7368; font-size:11px">\n        한자 변환 사전은 <b>libhangul</b>의 <code>hanja.txt</code>(Copyright (c) 2005, 2006 Choe Hwanjin)와\n        기호 사전 <code>mssymbol.txt</code>(Copyright (c) 2005-2014 Choe Hwanjin)입니다.\n        All rights reserved. (BSD 라이선스)\n        </p>\n        <div style="color:#7a7368; font-size:10px">\n        {}\n        </div>\n        <p style="font-size:11px">\n        PDF 뷰어와 오가는 동기화(정방향·역방향 검색)를 쓰려면, 환경설정의\n        "PDF 뷰어 역방향 검색" 행에서 <b>지금 등록</b> 버튼을 한 번 눌러\n        두십시오. 정방향 검색은 컴파일 메뉴나 편집창 우클릭 메뉴의\n        "PDF에서 이 위치 보기"(<code>Ctrl+Alt+F</code>)로 부릅니다.\n        </p>\n        <h3>단축키 요약</h3>\n        <table cellspacing="0">{}</table>\n        ': '\n        <h2 style="margin-bottom:2px">ndhmdWriter</h2>\n        <div style="color:#7a7368">Version {0}</div>\n        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex 0.20.0, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>\n        <p>\n        Author: {1}<br>\n        License: {2}\n        </p>\n        <p style="color:#7a7368; font-size:11px">\n        PySide6 is used so that the app can be distributed under the MIT license.\n        </p>\n        <p style="color:#7a7368; font-size:11px">\n        The hanja conversion dictionary is <code>hanja.txt</code> from <b>libhangul</b> (Copyright (c) 2005, 2006 Choe Hwanjin) and\n        the symbol dictionary <code>mssymbol.txt</code> (Copyright (c) 2005-2014 Choe Hwanjin).\n        All rights reserved. (BSD license)\n        </p>\n        <div style="color:#7a7368; font-size:10px">\n        {3}\n        </div>\n        <p style="font-size:11px">\n        To use synchronization with the PDF viewer (forward and reverse search), press the\n        <b>Register now</b> button once in the "PDF viewer reverse search" row of Preferences.\n        Forward search is invoked from the Compile menu or the editor\'s right-click menu with\n        "Show this position in PDF" (<code>Ctrl+Alt+F</code>).\n        </p>\n        <h3>Shortcut summary</h3>\n        <table cellspacing="0">{4}</table>\n        ',
+    '\n        <h2 style="margin-bottom:2px">ndhmdWriter</h2>\n        <div style="color:#7a7368">버전 {}</div>\n        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex ≥ 0.26.5, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>\n        <p>\n        지은이: {}<br>\n        라이선스: {}\n        </p>\n        <p style="color:#7a7368; font-size:11px">\n        MIT 라이선스로 배포하기 위해 PySide6를 사용했습니다.\n        </p>\n        <p style="color:#7a7368; font-size:11px">\n        한자 변환 사전은 <b>libhangul</b>의 <code>hanja.txt</code>(Copyright (c) 2005, 2006 Choe Hwanjin)와\n        기호 사전 <code>mssymbol.txt</code>(Copyright (c) 2005-2014 Choe Hwanjin)입니다.\n        All rights reserved. (BSD 라이선스)\n        </p>\n        <div style="color:#7a7368; font-size:10px">\n        {}\n        </div>\n        <p style="font-size:11px">\n        PDF 뷰어와 오가는 동기화(정방향·역방향 검색)를 쓰려면, 환경설정의\n        "PDF 뷰어 역방향 검색" 행에서 <b>지금 등록</b> 버튼을 한 번 눌러\n        두십시오. 정방향 검색은 컴파일 메뉴나 편집창 우클릭 메뉴의\n        "PDF에서 이 위치 보기"(<code>Ctrl+Alt+F</code>)로 부릅니다.\n        </p>\n        <h3>단축키 요약</h3>\n        <table cellspacing="0">{}</table>\n        ': '\n        <h2 style="margin-bottom:2px">ndhmdWriter</h2>\n        <div style="color:#7a7368">Version {0}</div>\n        <div style="color:#7a7368; font-size:11px">Powered by ndhmd4tex ≥ 0.26.5, ndhmdsync 0.5.6, ksruncltex and TeXLive 2026</div>\n        <p>\n        Author: {1}<br>\n        License: {2}\n        </p>\n        <p style="color:#7a7368; font-size:11px">\n        PySide6 is used so that the app can be distributed under the MIT license.\n        </p>\n        <p style="color:#7a7368; font-size:11px">\n        The hanja conversion dictionary is <code>hanja.txt</code> from <b>libhangul</b> (Copyright (c) 2005, 2006 Choe Hwanjin) and\n        the symbol dictionary <code>mssymbol.txt</code> (Copyright (c) 2005-2014 Choe Hwanjin).\n        All rights reserved. (BSD license)\n        </p>\n        <div style="color:#7a7368; font-size:10px">\n        {3}\n        </div>\n        <p style="font-size:11px">\n        To use synchronization with the PDF viewer (forward and reverse search), press the\n        <b>Register now</b> button once in the "PDF viewer reverse search" row of Preferences.\n        Forward search is invoked from the Compile menu or the editor\'s right-click menu with\n        "Show this position in PDF" (<code>Ctrl+Alt+F</code>).\n        </p>\n        <h3>Shortcut summary</h3>\n        <table cellspacing="0">{4}</table>\n        ',
 }
 
 _EN_EXACT = {}
