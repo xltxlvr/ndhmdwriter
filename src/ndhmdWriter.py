@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.14.6"
+__version__ = "0.14.7"
 
 from contextlib import contextmanager
 
@@ -25814,6 +25814,36 @@ _UI_LANG = "ko"
 _HANGUL_RE = re.compile("[가-힣ㄱ-ㅎㅏ-ㅣ]")
 
 _EN = {
+    '커서 자리의 앞뒤 몇 블록을 TeX 로 약식 조판해 오른쪽에 보여 줍니다(ndhmd4tex --preview-at).': 'Quickly typesets a few blocks around the cursor with TeX and shows them on the right (ndhmd4tex --preview-at).',
+    '외부 도구 블록': 'External tool blocks',
+    '```external 블록의 외부 도구 실행을 묻지 않고 항상 허용 (--external)': 'Always run external tools of ```external blocks without asking (--external)',
+    '원고에 ```external 블록이 있고 결과가 _external/ 에 아직 없으면 ndhmd4tex·ndhmd2html 이 mapping 에\n등록된 외부 도구를 실행해야 합니다. 기본은 실행 전에 한 번 묻습니다(결과가 이미 있으면 묻지 않습니다).\n남의 원고를 열 때도 명령이 돌 수 있으므로, 내 원고만 다룰 때에만 켜세요.': "If the manuscript has an ```external block and its result is not yet in _external/, ndhmd4tex / ndhmd2html must run the\nexternal tool registered in the mapping. By default Writer asks once before running (not when the result already exists).\nCommands may also run when you open someone else's manuscript, so turn this on only for your own manuscripts.",
+    '문헌 목록(HTML)': 'Bibliography (HTML)',
+    'HTML 변환 때마다 biber 문헌 목록을 새로 준비 (--bibharvest)': 'Rebuild the biber bibliography on every HTML conversion (--bibharvest)',
+    'front matter 에 bibliography: 가 있고 .bbl 이 biber 형식이면 ndhmd2html 은 bbl2bibitem.lua(texlua)로\n<이름>-thebib.tex 를 만들어야 목록을 씁니다. 기본은 그 목록이 없거나 낡았을 때 변환 뒤에 한 번 묻습니다.\n켜면 변환할 때마다 다시 만들므로 느릴 수 있습니다(이전 컴파일이 만든 .tex 와 texlua 가 필요).': 'If the front matter has bibliography: and the .bbl is in biber format, ndhmd2html must build\n<name>-thebib.tex with bbl2bibitem.lua (texlua) before it can use the list. By default Writer asks once after a conversion when that file is missing or stale.\nTurning this on rebuilds it on every conversion, which can be slow (needs the .tex from a previous compile, and texlua).',
+    'ndhmd4tex 옵션': 'ndhmd4tex options',
+    'ndhmd4tex 를 부르는 모든 명령(컴파일·변환·점검·메타 읽기) 맨 앞에 그대로 덧붙는 옵션입니다.\nWriter 가 상황에 따라 붙이는 옵션(--syncinfo, --default, -o, --inherit-meta, --external 등)은 그대로이고, 같은 옵션이 겹치면 Writer 쪽이 뒤에 와서 이깁니다.\n공백이 든 값은 따옴표로 묶으세요. 상대 경로는 원고가 있는 폴더 기준입니다.\n실제로 필요한 건 대개 --encoding 과 --config 정도입니다. 잘못 쓰면 모든 변환이 실패하니 비워서 확인하세요.': "Options prepended as-is to every ndhmd4tex command (compile, convert, lint, reading metadata).\nOptions Writer adds by itself (--syncinfo, --default, -o, --inherit-meta, --external, ...) stay as they are; if the same option appears twice, Writer's comes later and wins.\nQuote values that contain spaces. Relative paths are relative to the manuscript's folder.\nUsually only --encoding and --config are needed. A wrong value makes every conversion fail, so clear the field to check.",
+    '예: --encoding cp949   --config ./mapping.yaml': 'e.g. --encoding cp949   --config ./mapping.yaml',
+    '조판 미리보기 --context': 'Typeset preview --context',
+    ' 블록': ' blocks',
+    '앞뒤 ': 'Around ',
+    "조판 미리보기(F6)가 커서가 있는 블록의 앞뒤로 함께 그릴 블록 수 — ndhmd4tex 의 --context 입니다.\n기본 1. 늘리면 문맥이 넓어지지만 컴파일이 조금 느려집니다. 패널 안의 '앞뒤' 칸과 같은 값입니다.": 'Number of blocks drawn before and after the cursor\'s block in the typeset preview (F6) — ndhmd4tex\'s --context.\nDefault 1. A larger value gives more context but compiles a little slower. Same value as the "Around" box in the panel.',
+    '조판 미리보기 대기': 'Typeset preview delay',
+    "조판 미리보기(F6)의 '자동'이 켜져 있을 때, 입력(또는 다른 문단으로 커서 이동)이 멈춘 뒤 갱신을 시작하기까지 기다리는 시간입니다.\n1초 이상, 기본 1.2초. 여기에 변환·컴파일 시간이 더해집니다.": 'When "Auto" is on in the typeset preview (F6), how long to wait after typing (or moving the cursor to another paragraph) stops before refreshing starts.\nAt least 1 s, default 1.2 s. Conversion and compile time is added on top.',
+    "'이 파일만' 변환·컴파일 때 책 최상위 원고의 헤더를 가져와 쓴다 (--inherit-meta)": 'When converting/compiling "this file only", use the book\'s top-level header (--inherit-meta)',
+    '책 안의 한 파일만 컴파일(또는 HTML 변환)할 때, 최상위 원고의 front matter(class·classoption·preamble·\nsetup 등 — 쪽 설정·문서 글꼴 블록 포함)를 그대로 씁니다. 그 파일 자신의 front matter 는 무시하고,\ntitle·author·date·maketitle·tocloft 는 가져오지 않아 표지·목차는 생기지 않습니다.\n본문과 줄 번호는 그 파일 그대로여서 앞뒤 검색(.nmdsync)은 어긋나지 않습니다.\n끄면 지금까지처럼 그 파일을 단독으로 처리합니다. 책 전체 변환·컴파일, 책이 아닌 단독 원고에는 영향이 없습니다.': "When compiling (or converting to HTML) a single file of a book, use the top-level manuscript's front matter\n(class, classoption, preamble, setup, ... including the page-setup and document-font blocks) as is. The file's own front matter is ignored,\nand title, author, date, maketitle and tocloft are not taken, so no cover page or table of contents appears.\nThe body and line numbers stay the file's own, so forward/backward search (.nmdsync) is not thrown off.\nWhen off, the file is processed on its own as before. Whole-book conversion/compiling and standalone manuscripts are unaffected.",
+    '조각 그림 종류': 'Fragment figure kinds',
+    '조각 그림 도구의 종류를 더하거나 바꾼다(JSON 목록). 같은 id(plain, asy, lilypond, musixtex,\npmx, mtx, mpost)는 적은 키만 덮어쓴다. 키: label, ext, comment, engines, steps(명령 목록),\noutputs, crop(ink|none), template, timeout. 명령에는 {src} {stem} {engine}\n{inc:-I}(검색 폴더마다 -I 폴더) {glob:패턴} 을 쓸 수 있다. 저장하면 새로 여는 조각 그림 창부터 적용된다.': 'Add or change the kinds of fragment-figure tools (JSON list). An entry with an existing id (plain, asy, lilypond, musixtex,\npmx, mtx, mpost) overrides only the keys you give. Keys: label, ext, comment, engines, steps (command list),\noutputs, crop (ink|none), template, timeout. Commands may use {src} {stem} {engine}\n{inc:-I} (-I folder for each search folder) and {glob:pattern}. Applies from the next fragment-figure window you open.',
+    '조판 미리보기': 'Typeset preview',
+    '지금 갱신 (Shift+F6)': 'Refresh now (Shift+F6)',
+    '닫기 (F6)': 'Close (F6)',
+    '자동': 'Auto',
+    '입력을 멈추면 알아서 갱신합니다. 끄면 [⟳]이나 Shift+F6 으로만 갱신합니다.': 'Refreshes by itself when you stop typing. When off, refresh only with [⟳] or Shift+F6.',
+    '커서가 있는 블록(문단·목록·표 등)의 앞뒤로 함께 그릴 블록 수': "Number of blocks (paragraphs, lists, tables, ...) drawn before and after the cursor's block",
+    '폭 맞춤': 'Fit width',
+    '폭 맞춤: 쪽 폭을 패널 폭에 맞춥니다(패널이 좁으면 글자가 작습니다).\n100%: 종이에 인쇄한 실제 크기(96dpi 화면 기준). 150%·200%·300%는 그 배율이며 넘치면 가로로 스크롤됩니다.': 'Fit width: fits the page width to the panel (text is small if the panel is narrow).\n100%: actual printed size on paper (at 96 dpi screen). 150%, 200% and 300% are those magnifications; scroll horizontally if it overflows.',
+    '원고를 먼저 저장하거나 열어 주세요.': 'Please save or open the manuscript first.',
+    '커서가 있는 자리를 약식으로 조판해 보여 줍니다.': 'Shows a quick typeset of the place at the cursor.',
     '외부 도구(&Z)': 'External tools(&Z)',
     '외부 도구': 'External tools',
     '등록된 도구가 없습니다': 'No tools registered',
