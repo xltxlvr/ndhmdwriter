@@ -32,7 +32,7 @@ def have(name):
 
 # (원본 경로, 번들 안의 폴더) — "." 은 실행 시 앱의 기본 폴더(_MEIPASS)이다.
 datas = []
-for name in ("ndhmdwriter_icon.png",
+for name in ("ndhmdwriter_icon.png", "font.py",
              "shinjitai.json", "kyujitai.json", "simplified.json", "customkanji.json",
              "hanja.txt", "mssymbol.txt"):   # 한자 변환(F9) 사전 원본 — libhangul, BSD 라이선스. 머리말의 저작권 표시를 지우지 말 것
     if have(name):
