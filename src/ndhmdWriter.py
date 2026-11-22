@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.14.7"
+__version__ = "0.14.8"
 
 from contextlib import contextmanager
 
@@ -16555,6 +16555,30 @@ class TypesetPreview(QWidget):
         lay.addWidget(self.scroll, 1)
         self.setMinimumWidth(240)
 
+    def apply_theme(self, theme: Theme):
+        """붙어 있을 때(독) 시스템 팔레트가 아니라 앱 테마를 따른다 — 다크 모드에서 글자가 안 보이던 문제."""
+        fg, bg = QColor(theme.fg), QColor(theme.bg)
+        mix = lambda x, y: int(x * 0.7 + y * 0.3)
+        dim = QColor(mix(fg.red(), bg.red()), mix(fg.green(), bg.green()), mix(fg.blue(), bg.blue())).name()
+        edge = theme.marker
+        self.setObjectName("tspvRoot")
+        self.setStyleSheet(f"""
+            QWidget#tspvRoot {{ background: {theme.bg}; }}
+            QWidget#tspvRoot QLabel {{ color: {theme.fg}; }}
+            QWidget#tspvRoot QCheckBox {{ color: {theme.fg}; }}
+            QWidget#tspvRoot QSpinBox, QWidget#tspvRoot QComboBox {{
+                color: {theme.fg}; background: {theme.bg}; border: 1px solid {edge};
+                border-radius: 3px; padding: 1px 4px; }}
+            QWidget#tspvRoot QComboBox QAbstractItemView {{
+                color: {theme.fg}; background: {theme.bg};
+                selection-background-color: {theme.current_line}; selection-color: {theme.fg}; }}
+            QWidget#tspvRoot QToolButton {{ color: {theme.fg}; background: transparent;
+                border: 1px solid transparent; border-radius: 3px; padding: 1px 5px; }}
+            QWidget#tspvRoot QToolButton:hover {{ background: {theme.current_line}; border-color: {edge}; }}
+            QWidget#tspvRoot QScrollArea {{ background: {theme.bg}; border: 1px solid {edge}; }}
+        """)
+        self.status.setStyleSheet(f"color: {dim}; font-size: 11px;")
+
     def sizeHint(self):
         return QSize(380, 600)
 
@@ -25325,6 +25349,8 @@ class MainWindow(QMainWindow):
         self.toc.apply_theme(theme)
         self.preview.apply_theme(theme)
         self.tag_bar.apply_theme(theme)
+        if getattr(self, "tspv", None) is not None:
+            self.tspv.apply_theme(theme)
         if getattr(self, "_accent_panel", None) is not None:
             self._accent_panel.apply_theme(theme)
         if getattr(self, "_note_panel", None) is not None:
