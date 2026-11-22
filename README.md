@@ -127,7 +127,7 @@ Bug reports are welcome.
 
 # ndhmdSuite
 
-ndhmdSuite is an all-in-one installer designed to set up the ndhmd environment on Windows. It includes the following components:
+ndhmdSuite is an all-in-one installer designed to set up the ndhmd environment on Windows or macOS. It includes the following components:
 
 - **ndhmd4tex**: A command-line utility that parses the ndhmarkdown language and converts it into TeX.
 - **ndhmd2html**: A command-line utility that converts ndhmarkdown into (X)HTML.
