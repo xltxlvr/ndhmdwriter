@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.14.8"
+__version__ = "0.15.0"
 
 from contextlib import contextmanager
 
@@ -4272,6 +4272,7 @@ class DrawerTree(QTreeWidget):
         self.setHeaderHidden(True)
         self.setRootIsDecorated(True)
         self.setUniformRowHeights(True)
+        self.setTextElideMode(Qt.ElideMiddle)   # 긴 이름은 가운데를 줄여 앞(번호)과 뒤(끝말)를 함께 보인다
         self.setDragDropMode(QTreeWidget.InternalMove)
         self.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.setExpandsOnDoubleClick(False)
@@ -4335,6 +4336,33 @@ class DrawerTree(QTreeWidget):
         r = self._note_mark_rect(item)
         return item if (r is not None and r.contains(pos)) else None
 
+    def selected_paths(self) -> list:
+        """고른 원고 항목의 경로 — 화면에 보이는 순서대로(고른 순서가 아니다)."""
+        sel = set(self.selectedItems())
+        out = []
+        it = QTreeWidgetItemIterator(self)
+        while it.value():
+            w = it.value()
+            if w in sel and w.data(0, Qt.UserRole + 1) is None:
+                raw = w.data(0, Qt.UserRole)
+                if raw and Path(raw) in self._win.index.by_path:
+                    out.append(Path(raw))
+            it += 1
+        return out
+
+    #: Alt+화살표 → 끌지 않고 옮기기. 위·아래는 같은 단계에서의 순서, 오른쪽은 앞 항목의 하위로, 왼쪽은 한 단계 위로.
+    _MOVE_KEYS = {Qt.Key_Up: "up", Qt.Key_Down: "down", Qt.Key_Right: "in", Qt.Key_Left: "out"}
+
+    def keyPressEvent(self, e):
+        mods = e.modifiers() & ~Qt.KeypadModifier
+        if mods == Qt.AltModifier and e.key() in self._MOVE_KEYS:
+            paths = self.selected_paths()
+            if paths:
+                self._win.drawer_move(paths, self._MOVE_KEYS[e.key()])
+            e.accept()
+            return
+        super().keyPressEvent(e)
+
     def mousePressEvent(self, e):
         self._press_pos = e.position().toPoint()
         super().mousePressEvent(e)
@@ -4394,6 +4422,17 @@ class DrawerTree(QTreeWidget):
             lambda: self._win.rename_item(path))
         node = self._win.index.by_path.get(path)
         if node is not None:
+            movers = self.selected_paths() or [path]
+            mv = menu.addMenu("이동(&M)")
+            for label, how in (("위로\tAlt+↑", "up"), ("아래로\tAlt+↓", "down"),
+                               ("맨 앞으로", "top"), ("맨 뒤로", "bottom"),
+                               ("앞 항목의 하위로\tAlt+→", "in"),
+                               ("한 단계 위로(상위 뒤로)\tAlt+←", "out")):
+                mv.addAction(label).triggered.connect(
+                    lambda _=False, h=how: self._win.drawer_move(movers, h))
+            mv.addSeparator()
+            mv.addAction("위치를 골라 이동…").triggered.connect(
+                lambda: self._win.drawer_move_to(movers))
             sub = menu.addMenu("구조")
             sub.addAction("장별로 자르기…").triggered.connect(
                 lambda: (self._win.open_from_drawer(path), self._win.split_into_chapters()))
@@ -4614,8 +4653,14 @@ class Drawer(QWidget):
 
         filter_row = QHBoxLayout()
         filter_row.setSpacing(4)
+        self.float_btn = QToolButton()
+        self.float_btn.setText("⧉")
+        self.float_btn.setToolTip("떼어내기 — 따로 떠다니는 창으로(넓게 펼쳐 놓고 쓸 수 있다)")
+        self.float_btn.clicked.connect(lambda: window.toggle_float_drawer())
+
         filter_row.addWidget(self.filter, 1)
         filter_row.addWidget(self.tag_btn)
+        filter_row.addWidget(self.float_btn)
 
         self.tree = DrawerTree(window)
 
@@ -18876,7 +18921,14 @@ class MainWindow(QMainWindow):
         box.addWidget(self.find_bar)
 
         self.splitter = QSplitter(Qt.Horizontal)
-        self.splitter.addWidget(self.drawer)
+        #: 서랍을 떼어내도 칸 번호(0~3)가 밀리지 않게, 서랍은 이 상자에 담아 둔다.
+        self.drawer_box = QWidget()
+        _db = QVBoxLayout(self.drawer_box)
+        _db.setContentsMargins(0, 0, 0, 0)
+        _db.setSpacing(0)
+        _db.addWidget(self.drawer, 1)
+        self.drawer_box.setMinimumWidth(180)
+        self.splitter.addWidget(self.drawer_box)
         self.splitter.addWidget(right)
         self.wing_box = QWidget()
         self._wing_layout = QVBoxLayout(self.wing_box)
@@ -19972,6 +20024,7 @@ class MainWindow(QMainWindow):
         needle = self.drawer.filter.text().strip()
 
         tree = self.drawer.tree
+        vbar_value = tree.verticalScrollBar().value()   # 다시 그려도 보던 자리를 지킨다
         tree.blockSignals(True)
         tree.clear()
         current = self._path
@@ -20019,6 +20072,7 @@ class MainWindow(QMainWindow):
             top = QTreeWidgetItem(tree, [self._drawer_label(node)])
             top.setData(0, Qt.UserRole, str(node.path))
             top.setFlags(top.flags() | Qt.ItemIsDropEnabled | Qt.ItemIsDragEnabled)
+            top.setToolTip(0, self._drawer_tip(node))
             self._mark_nmd_item(top, node.path)
 
             def add_book_child(parent_item, child_path, force_show):
@@ -20042,6 +20096,7 @@ class MainWindow(QMainWindow):
                 # 장도 하위 항목도 전부 드롭을 받는다 — 그 위에 놓으면
                 # 그 항목의 자식(한 단계 더)으로 붙는다.
                 it.setFlags(it.flags() | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
+                it.setToolTip(0, self._drawer_tip(child_node))
                 self._mark_nmd_item(it, child_path)
                 if current and child_path == current:
                     tree.setCurrentItem(it)
@@ -20166,7 +20221,24 @@ class MainWindow(QMainWindow):
             folder_header.setExpanded(
                 self._subfolder_expanded.get(str(folder), False))
 
+        want_sel = getattr(self, "_drawer_reselect", None)
+        if want_sel:
+            self._drawer_reselect = None
+            wanted = {str(x) for x in want_sel}
+            it_ = QTreeWidgetItemIterator(tree)
+            first = True
+            while it_.value():
+                itm = it_.value()
+                if (itm.data(0, Qt.UserRole) in wanted
+                        and itm.data(0, Qt.UserRole + 1) is None):
+                    if first:
+                        tree.setCurrentItem(itm)
+                        first = False
+                    itm.setSelected(True)
+                it_ += 1
         tree.blockSignals(False)
+        QTimer.singleShot(0, lambda v=vbar_value: tree.verticalScrollBar().setValue(v))
+        tree.verticalScrollBar().setValue(vbar_value)
 
     def _mark_nmd_item(self, item: QTreeWidgetItem, path: Path):
         """`.nmd`(스타일·템플릿으로 쓰는 원고)는 파란 글자로 보여, 이름이 길어
@@ -20177,6 +20249,13 @@ class MainWindow(QMainWindow):
         bg = QColor(self.prefs.resolved_theme().bg)
         item.setForeground(0, QColor("#6CB6FF" if bg.lightness() < 128 else "#1F6FD0"))
         item.setToolTip(0, f"{path.name} — .nmd (스타일·템플릿 원고)")
+
+    def _drawer_tip(self, node: Node) -> str:
+        """항목에 올렸을 때 뜨는 전체 이름(줄여 보이는 이름을 읽을 수 있게)."""
+        tip = node.path.name
+        if self.notes.has(node.path):
+            tip = f"{DrawerTree.NOTE_MARK} {tip}"
+        return tip
 
     def _drawer_label(self, node: Node) -> str:
         name = node.path.name
@@ -20368,6 +20447,180 @@ class MainWindow(QMainWindow):
         self._rewrite_includes(parent, names)
         self._set_ndhmain_hint(src, self._book_root_name(parent))
         self._resync_descendant_ndhmain(src)
+
+    # -- 끌지 않고 옮기기 -----------------------------------------------------------
+
+    @staticmethod
+    def _reordered(names: list, sel: set, how: str) -> list:
+        """names 안에서 sel 에 든 것들을 how(up|down|top|bottom)대로 옮긴 새 목록."""
+        lst = list(names)
+        if how == "up":
+            for i in range(1, len(lst)):
+                if lst[i] in sel and lst[i - 1] not in sel:
+                    lst[i - 1], lst[i] = lst[i], lst[i - 1]
+        elif how == "down":
+            for i in range(len(lst) - 2, -1, -1):
+                if lst[i] in sel and lst[i + 1] not in sel:
+                    lst[i + 1], lst[i] = lst[i], lst[i + 1]
+        elif how == "top":
+            lst = [n for n in lst if n in sel] + [n for n in lst if n not in sel]
+        elif how == "bottom":
+            lst = [n for n in lst if n not in sel] + [n for n in lst if n in sel]
+        return lst
+
+    def _place_in(self, srcs: list, parent: Path, anchor: str | None, after: bool) -> bool:
+        """srcs 를 parent 의 {{}} 목록에 넣는다. anchor(파일 이름) 앞/뒤에, 없으면 맨 끝에.
+        다른 부모에 있던 것은 거기서 뺀다. 파일 쓰기는 끝에 한 번만 하고, 다시 그리는 것은 부른 쪽 몫이다."""
+        failed, ok_list = [], []
+        for src in srcs:
+            node = self.index.by_path.get(src)
+            here = node is not None and node.parent == parent
+            ok, why = self.index.can_nest(src, parent)
+            if not ok and not here:
+                if why:
+                    failed.append(f"{src.name}: {why}")
+                continue
+            ok_list.append(src)
+        for src in ok_list:
+            node = self.index.by_path.get(src)
+            if node is not None and node.parent not in (None, parent):
+                self._detach(src)
+        moving = {s.name for s in ok_list}
+        names = [n for n in self.index.read_includes(parent) if n not in moving]
+        at = len(names)
+        if anchor is not None and anchor in names:
+            at = names.index(anchor) + (1 if after else 0)
+        for i, s_ in enumerate(ok_list):
+            names.insert(at + i, s_.name)
+        if ok_list:
+            self._rewrite_includes(parent, names, refresh=False)
+            for src in ok_list:
+                self._set_ndhmain_hint(src, self._book_root_name(parent))
+                self._resync_descendant_ndhmain(src)
+        self._report_batch_failures(failed)
+        return bool(ok_list)
+
+    def drawer_move(self, paths: list, how: str):
+        """서랍 항목을 끌지 않고 옮긴다. how: up|down|top|bottom|in|out.
+        결과는 늘 {{}} 줄을 고치는 것으로 만들어지고, 끝나면 보던 자리와 선택을 그대로 두고 다시 그린다."""
+        paths = [Path(p) for p in paths if Path(p) in self.index.by_path]
+        if not paths:
+            return
+        groups = {}
+        for p in paths:
+            groups.setdefault(self.index.by_path[p].parent, []).append(p)
+        msg = ""
+        changed = False
+        for parent, items in groups.items():
+            if parent is None:
+                msg = "최상위 항목은 순서가 없습니다 — 책에 넣으려면 [이동 ▸ 위치를 골라 이동…]을 쓰세요."
+                continue
+            names = self.index.read_includes(parent)
+            sel = {x.name for x in items}
+            if how in ("up", "down", "top", "bottom"):
+                new = self._reordered(names, sel, how)
+                if new != names:
+                    self._rewrite_includes(parent, new, refresh=False)
+                    changed = True
+            elif how == "in":
+                pnode = self.index.by_path.get(parent)
+                if pnode is not None and pnode.parent is not None:
+                    msg = "포함은 2단계까지만 지원됩니다."
+                    continue
+                first = min((names.index(n) for n in sel if n in names), default=None)
+                prev = None
+                if first is not None:
+                    for n in reversed(names[:first]):
+                        if n not in sel:
+                            prev = n
+                            break
+                if prev is None:
+                    msg = "합칠 앞 항목이 없습니다."
+                    continue
+                target = parent.parent / prev
+                if target not in self.index.by_path:
+                    msg = f"{prev} 은(는) 작업공간에서 찾을 수 없습니다."
+                    continue
+                changed |= self._place_in(items, target, None, False)
+            elif how == "out":
+                pnode = self.index.by_path.get(parent)
+                if pnode is None:
+                    continue
+                if pnode.parent is None:
+                    for src in items:
+                        self._detach(src)
+                        self._resync_descendant_ndhmain(src)
+                    changed = True
+                else:
+                    changed |= self._place_in(items, pnode.parent, parent.name, True)
+        if msg:
+            self.statusBar().showMessage(msg, 4000)
+        if changed:
+            self._drawer_reselect = paths
+            self.refresh_drawer()
+
+    def drawer_move_to(self, paths: list):
+        """[이동 ▸ 위치를 골라 이동…] — 어느 항목 앞/뒤/하위로 보낼지 목록에서 골라서 옮긴다."""
+        paths = [Path(p) for p in paths if Path(p) in self.index.by_path]
+        if not paths:
+            return
+        moving = set(paths)
+        order = []
+        it = QTreeWidgetItemIterator(self.drawer.tree)
+        while it.value():
+            w = it.value()
+            raw = w.data(0, Qt.UserRole)
+            if raw and w.data(0, Qt.UserRole + 1) is None and Path(raw) in self.index.by_path:
+                if Path(raw) not in moving:
+                    order.append(Path(raw))
+            it += 1
+        if not order:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("위치를 골라 이동")
+        lay = QVBoxLayout(dlg)
+        what = paths[0].name if len(paths) == 1 else f"{paths[0].name} 외 {len(paths) - 1}개"
+        lay.addWidget(QLabel(f"{what} 을(를) 다음 항목의…"))
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setInsertPolicy(QComboBox.NoInsert)
+        for q in order:
+            combo.addItem(q.name, str(q))
+        comp = combo.completer()
+        comp.setFilterMode(Qt.MatchContains)
+        comp.setCaseSensitivity(Qt.CaseInsensitive)
+        lay.addWidget(combo)
+        r_before = QRadioButton("앞으로")
+        r_after = QRadioButton("뒤로")
+        r_under = QRadioButton("하위(맨 끝)로")
+        r_after.setChecked(True)
+        for rb in (r_before, r_after, r_under):
+            lay.addWidget(rb)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        k = combo.findText(combo.currentText())
+        if k < 0:
+            self.statusBar().showMessage("목록에 있는 항목을 고르세요.", 3000)
+            return
+        target = Path(combo.itemData(k))
+        tnode = self.index.by_path.get(target)
+        if tnode is None:
+            return
+        if r_under.isChecked():
+            ok = self._place_in(paths, target, None, False)
+        elif tnode.parent is None:
+            self.statusBar().showMessage(
+                "최상위 항목의 앞·뒤에는 순서가 없습니다 — [하위로]를 고르세요.", 4000)
+            return
+        else:
+            ok = self._place_in(paths, tnode.parent, target.name, r_after.isChecked())
+        if ok:
+            self._drawer_reselect = paths
+            self.refresh_drawer()
 
     def handle_drawer_drop_multi(self, srcs: list, target: Path | None,
                                  on_item: bool, on_viewport: bool):
@@ -20991,10 +21244,62 @@ class MainWindow(QMainWindow):
         return n
 
     def toggle_drawer(self, on: bool):
-        if not on:
+        floating = "drawer" in self._floating
+        if not on and not floating:
             self._remember_pane(0)
         self.drawer.setVisible(on)
-        if on:
+        if floating:
+            self._floating["drawer"].setVisible(on)   # 떠 있으면 그 창이 열리고 닫힌다
+        self._sync_drawer_box()
+        if on and not floating:
+            self._ensure_pane(0)
+
+    def _sync_drawer_box(self):
+        """서랍 칸(상자)은 서랍이 붙어 있고 보일 때만 열려 있다."""
+        want = "drawer" not in self._floating and not self.drawer.isHidden()
+        self.drawer_box.setVisible(want)
+
+    # -- 서랍 떼어내기 -----------------------------------------------------------
+
+    def toggle_float_drawer(self):
+        if "drawer" in self._floating:
+            self.dock_drawer()
+        else:
+            self.float_drawer()
+
+    def float_drawer(self):
+        if "drawer" in self._floating:
+            return
+        self._remember_pane(0)
+        win = FloatingPanelWindow(self, "drawer", self.drawer, "서랍")
+        self._floating["drawer"] = win
+        self.drawer.float_btn.setText("⊡")
+        self.drawer.float_btn.setToolTip("붙이기 — 원래 자리(왼쪽 칸)로")
+        geom = self._settings.value("view/drawer_float_geom")
+        if geom is None or not win.restoreGeometry(geom):
+            win.resize(520, 700)
+            g = self.geometry()
+            win.move(g.left() + 20, g.top() + 60)
+        self._settings.setValue("view/drawer_floating", True)
+        self.drawer.setVisible(self._act_drawer.isChecked())
+        win.setVisible(self._act_drawer.isChecked())
+        self._sync_drawer_box()
+
+    def dock_drawer(self):
+        win = self._floating.pop("drawer", None)
+        if win is None:
+            return
+        self._settings.setValue("view/drawer_float_geom", win.saveGeometry())
+        self._settings.setValue("view/drawer_floating", False)
+        win.layout().removeWidget(self.drawer)
+        self.drawer_box.layout().addWidget(self.drawer, 1)
+        self.drawer.float_btn.setText("⧉")
+        self.drawer.float_btn.setToolTip("떼어내기 — 따로 떠다니는 창으로(넓게 펼쳐 놓고 쓸 수 있다)")
+        self.drawer.setVisible(self._act_drawer.isChecked())
+        win.hide()
+        win.deleteLater()
+        self._sync_drawer_box()
+        if self._act_drawer.isChecked():
             self._ensure_pane(0)
 
     def toggle_drawer_sort(self, mtime_first: bool):
@@ -21191,6 +21496,10 @@ class MainWindow(QMainWindow):
         if key == "tspv":
             self._set_tspv_visible(False)
             return
+        if key == "drawer":
+            self._act_drawer.setChecked(False)
+            self.toggle_drawer(False)
+            return
         act = self._act_wing if key == "wing" else self._act_toc
         act.setChecked(False)
         (self.toggle_wing if key == "wing" else self.toggle_toc)(False)
@@ -21201,6 +21510,9 @@ class MainWindow(QMainWindow):
             if act.isChecked() and self._settings.value(
                     f"view/{key}_floating", False, type=bool):
                 self.float_panel(key)
+        if self._act_drawer.isChecked() and self._settings.value(
+                "view/drawer_floating", False, type=bool):
+            self.float_drawer()
 
     def refresh_toc(self):
         if self._act_toc.isChecked():
@@ -25393,7 +25705,8 @@ class MainWindow(QMainWindow):
         if self.editor.toPlainText() == getattr(self, "_baseline_text", None):
             return                      # 포맷팅만 바뀐 신호(여백 재계산 등) — 실제 글자는 그대로다
         was_shown = self._title_dirty
-        if not self._dirty and self.prefs.auto_close_drawer() and self.drawer.isVisible():
+        if not self._dirty and self.prefs.auto_close_drawer() and self.drawer.isVisible() \
+                and "drawer" not in self._floating:
             # 저장된 상태에서 처음 고치는 순간 — 글쓰기가 시작되었으니 서랍을 닫는다.
             self._act_drawer.setChecked(False)
             self.toggle_drawer(False)
@@ -25840,6 +26153,26 @@ _UI_LANG = "ko"
 _HANGUL_RE = re.compile("[가-힣ㄱ-ㅎㅏ-ㅣ]")
 
 _EN = {
+    '떼어내기 — 따로 떠다니는 창으로(넓게 펼쳐 놓고 쓸 수 있다)': 'Detach — into a separate floating window (can be spread wide)',
+    '붙이기 — 원래 자리(왼쪽 칸)로': 'Attach — back to its place (left pane)',
+    '서랍': 'Drawer',
+    '이동(&M)': 'Move(&M)',
+    '위로\tAlt+↑': 'Up\tAlt+↑',
+    '아래로\tAlt+↓': 'Down\tAlt+↓',
+    '맨 앞으로': 'To the very top',
+    '맨 뒤로': 'To the very bottom',
+    '앞 항목의 하위로\tAlt+→': 'Into the previous item\tAlt+→',
+    '한 단계 위로(상위 뒤로)\tAlt+←': 'Up one level (after its parent)\tAlt+←',
+    '위치를 골라 이동…': 'Move to a chosen position…',
+    '위치를 골라 이동': 'Move to a chosen position',
+    '앞으로': 'Before',
+    '뒤로': 'After',
+    '하위(맨 끝)로': 'Into it (at the end)',
+    '최상위 항목은 순서가 없습니다 — 책에 넣으려면 [이동 ▸ 위치를 골라 이동…]을 쓰세요.': 'Top-level items have no order — to put one into a book, use [Move ▸ Move to a chosen position…].',
+    '포함은 2단계까지만 지원됩니다.': 'Includes are supported only to two levels.',
+    '합칠 앞 항목이 없습니다.': 'There is no previous item to merge into.',
+    '목록에 있는 항목을 고르세요.': 'Pick an item from the list.',
+    '최상위 항목의 앞·뒤에는 순서가 없습니다 — [하위로]를 고르세요.': 'There is no order before/after a top-level item — choose [Into it].',
     '커서 자리의 앞뒤 몇 블록을 TeX 로 약식 조판해 오른쪽에 보여 줍니다(ndhmd4tex --preview-at).': 'Quickly typesets a few blocks around the cursor with TeX and shows them on the right (ndhmd4tex --preview-at).',
     '외부 도구 블록': 'External tool blocks',
     '```external 블록의 외부 도구 실행을 묻지 않고 항상 허용 (--external)': 'Always run external tools of ```external blocks without asking (--external)',
