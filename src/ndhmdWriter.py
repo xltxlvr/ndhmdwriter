@@ -24,7 +24,7 @@ from __future__ import annotations
 
 #: semver. 도움말(F1)에 그대로 보여준다. 수정이 있을 때마다 마지막
 #: 자리(patch)를 하나씩 올린다 — CHANGELOG.md 에 그 기록을 남긴다.
-__version__ = "0.15.0"
+__version__ = "0.15.2"
 
 from contextlib import contextmanager
 
@@ -584,8 +584,14 @@ EMPHASIS_RULES = (
     (re.compile(r"\*\*(.+?)\*\*"), "f_bold", 2),
     (re.compile(r"\*(.+?)\*"), "f_italic", 1),
     (re.compile(r"~~(.+?)~~"), "f_strike", 2),
+    # `_산세_` · `__산세 굵게__` (ndhmd4tex 0.27.0). 여는 `_` 는 바로 앞이 단어 글자(한글 포함)가 아닐 때만,
+    # 닫는 `_` 는 바로 뒤가 ASCII 영숫자·`_` 가 아닐 때만 표지다 — snake_case·한글_변수_이름·파일 이름은 그대로 둔다.
+    (re.compile(r"(?<!\w)__(?=[^\s_])(.+?)(?<=[^\s_])__(?![A-Za-z0-9_])"), "f_sans_bold", 2),
+    (re.compile(r"(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?![A-Za-z0-9_])"), "f_sans", 1),
     (re.compile(r"\^\^(.+?)\^\^"), "f_dotemph", 2),
 )
+#: 이 규칙들은 표지가 링크 주소·맨 주소 안에 있으면 건너뛴다(변환기는 주소를 먼저 보호한다).
+EMPHASIS_URL_GUARDED = ("f_sans", "f_sans_bold")
 
 # 여러 줄에 걸치는 스팬의 여닫는 표지
 # 여러 줄 스팬을 통째로 잡는 것들 — 미리보기가 커서 위치로 범위를 찾을 때 쓴다.
@@ -1118,6 +1124,11 @@ class NdhmdHighlighter(QSyntaxHighlighter):
         self.f_dotemph.setFontUnderline(True)
         self.f_dotemph.setUnderlineStyle(QTextCharFormat.DotLine)
         self.f_dotemph.setUnderlineColor(QColor(t.env_name))
+        # _산세_ / __산세 굵게__ — 글꼴을 바꿔 보이지는 않고(편집창은 고정폭) 옅은 바탕색으로 구별한다.
+        _ec = QColor(t.env_name)
+        _sb = lambda k: QColor(*[round(_bc.getRgb()[i] * (1 - k) + _ec.getRgb()[i] * k) for i in range(3)]).name()
+        self.f_sans = fmt(None, bg=_sb(0.16))
+        self.f_sans_bold = fmt(None, bold=True, bg=_sb(0.16))
         self.f_warn = fmt(t.warn, italic=True)
         self.f_hr = fmt(t.marker, bold=True)
 
@@ -1436,11 +1447,11 @@ class NdhmdHighlighter(QSyntaxHighlighter):
             for i in range(m.start(1), m.end(1)):
                 protected[i] = 1
 
-        self._paint_urls(text, pos, protected)
+        url_spans = self._paint_urls(text, pos, protected)
 
         # 강조는 맨 나중에. 위 규칙들은 setFormat 으로 구간을 갈아치우지만
         # 강조는 _merge_format 으로 덧씌우므로, 순서를 뒤집으면 지워진다.
-        self._paint_emphasis(text, pos, protected)
+        self._paint_emphasis(text, pos, protected, url_spans)
 
         for st, en in rawopts:
             self.setFormat(st, en - st, self.f_heading_attr)
@@ -1460,7 +1471,7 @@ class NdhmdHighlighter(QSyntaxHighlighter):
                         self.setFormat(opt_start, i + 1 - opt_start, self.f_heading_attr)
                         break
 
-    def _paint_emphasis(self, text: str, pos: int, protected):
+    def _paint_emphasis(self, text: str, pos: int, protected, url_spans=()):
         """강조 규칙을 ndhmd4tex 의 순서대로, 같은 방식으로 얹는다.
 
         변환기는 규칙표를 순서대로 re.sub 한다. 즉 `**굵게**` 가 먼저
@@ -1484,6 +1495,9 @@ class NdhmdHighlighter(QSyntaxHighlighter):
                 ok = (not any(protected[k] for k in range(start, end))
                       and not any(consumed[k] for k in range(start, start + marker))
                       and not any(consumed[k] for k in range(end - marker, end)))
+                if ok and fmt_name in EMPHASIS_URL_GUARDED and url_spans:
+                    ok = not any(a <= k < b for a, b in url_spans
+                                 for k in (start, end - 1))
                 if not ok:
                     # 거절한 매치에서 이터레이터를 끝까지 밀면 안 된다.
                     # `**굵은 *기울임* 포함**` 에서 italic 의 첫 매치는
@@ -1503,6 +1517,7 @@ class NdhmdHighlighter(QSyntaxHighlighter):
         그림(![..](..), ![..][..])과 그림 정의 줄은 그대로 둔다."""
         occupied = [(m.start(), m.end()) for rx in (FIGURE_RE, FIGURE_REF_RE)
                     for m in rx.finditer(text)]
+        spans = []                      # 변환기가 먼저 보호하는 주소 자리 — 호출한 쪽이 쓴다
 
         def free(a, b):
             return not any(protected[i] for i in range(a, b)) and \
@@ -1523,12 +1538,15 @@ class NdhmdHighlighter(QSyntaxHighlighter):
                 self.setFormat(a, m.end() - a,
                                self.f_link_url if is_xref else self.f_url)
                 occupied.append((m.start(), m.end()))
+                spans.append((a, m.end()))
         if FIGURE_DEF_RE.match(text):
-            return                       # 정의 줄은 그림일 수도 — 칠하지 않는다
+            return spans                 # 정의 줄은 그림일 수도 — 칠하지 않는다
         for m in BARE_URL_RE.finditer(text, pos):
             u = trim_url(m.group(0))
             if u and free(m.start(), m.start() + len(u)):
                 self.setFormat(m.start(), len(u), self.f_url)
+                spans.append((m.start(), m.start() + len(u)))
+        return spans
 
     def _merge_format(self, start: int, count: int, extra: QTextCharFormat):
         """기존 포맷 위에 덧씌운다.
@@ -16136,9 +16154,11 @@ def page_layout_conflicts(preamble: str, classoption: str = "") -> tuple:
 # 장별로 자르기 · 하위 파일 합치기 — 순수 텍스트 처리
 # ===========================================================================
 
-def _scan_headings(text: str):
+def _scan_headings(text: str, rx=None):
     """(줄 목록, 제목 목록 [(줄번호, 수준, 제목글)...], 문서 끝에 남길 첫 줄 번호).
-    프론트매터·코드 펜스·`:::` 환경·`====` 틀·`$$` 수식·주석 안의 `#` 줄은 제목으로 보지 않는다."""
+    프론트매터·코드 펜스·`:::` 환경·`====` 틀·`$$` 수식·주석 안의 `#` 줄은 제목으로 보지 않는다.
+    rx(컴파일된 정규식)를 주면 `#` 제목 대신 그 정규식이 줄 어디에서든 일치하는 줄을 "제목"(수준 1)으로 본다 —
+    제외하는 자리는 같다."""
     lines = text.split("\n")
     i0 = 0
     if lines and lines[0].strip() == "---":
@@ -16188,6 +16208,10 @@ def _scan_headings(text: str):
             frame = max(0, frame - 1)
             continue
         if env == 0 and frame == 0:
+            if rx is not None:
+                if rx.search(line):
+                    heads.append((idx, 1, line.strip()))
+                continue
             m = HEADING_RE.match(line)
             if m:
                 heads.append((idx, len(m.group(1)), m.group(2).strip()))
@@ -16201,7 +16225,7 @@ def _scan_headings(text: str):
     return lines, heads, tail
 
 
-def split_chapter_sections(text: str, level: int | None = None):
+def split_chapter_sections(text: str, level: int | None = None, rx=None):
     """문서를 한 수준의 제목마다 잘라 낼 계획을 세운다. level 이 None 이면 문서 안에서 가장 높은(# 수가 가장 적은)
     제목 수준이다. 그 수준의 제목이 둘 미만이면 None.
 
@@ -16209,7 +16233,7 @@ def split_chapter_sections(text: str, level: int | None = None):
     더 높은 수준의 제목과 그 앞의 글은 원 문서에 남는다.
     돌려주는 값: {"lines","level","tail","sections":[{"start","end"(배타적),"title","includes":[이름...]}]}
     """
-    lines, heads, tail = _scan_headings(text)
+    lines, heads, tail = _scan_headings(text, rx)
     if not heads:
         return None
     mlines = mask_md_comments(text).split("\n")      # 주석 안의 {{}} 줄은 포함으로 세지 않는다
@@ -16288,16 +16312,45 @@ def merge_child_text(child_text: str):
 
 
 class SplitChaptersDialog(QDialog):
-    """장별로 자르기 — 접두어를 받고, 어떤 파일이 어떻게 만들어질지 미리 보여 준다."""
+    """장별로 자르기 — 기준(제목 `#` / 정규식)과 접두어를 받고, 어떤 파일이 어떻게 만들어질지 미리 보여 준다."""
 
-    def __init__(self, window: "MainWindow", doc: Path, plan: dict, default_prefix: str):
+    MAX_SECTIONS = 1000
+
+    def __init__(self, window: "MainWindow", doc: Path, text: str, default_prefix: str):
         super().__init__(window)
         self._doc = doc
-        self._plan = plan
+        self._text = text
+        self._plan = None
+        self._note = ""
         self.setWindowTitle("장별로 자르기")
-        self.resize(560, 420)
+        self.resize(600, 520)
+        self._head_plan = split_chapter_sections(text)
+        self._head_note = ""
+        if self._head_plan is None:
+            nxt = next_split_level(text)
+            if nxt is not None:
+                self._head_plan = split_chapter_sections(text, level=nxt)
+                self._head_note = f"(가장 높은 수준의 제목이 하나뿐이라 한 단계 아래 {'#' * nxt} 로 자릅니다)"
+        self.by_heading = QRadioButton("제목(#)마다")
+        self.by_regex = QRadioButton("정규식에 일치하는 줄마다")
+        (self.by_heading if self._head_plan is not None else self.by_regex).setChecked(True)
+        if self._head_plan is None:
+            self.by_heading.setEnabled(False)
+        self.regex_edit = QLineEdit()
+        self.regex_edit.setPlaceholderText(r"예: ^제\s*\d+\s*장    ^\*\s*\*\s*\*$    (?i)^chapter\b")
+        self.regex_edit.setToolTip(
+            "줄 하나에 대해 검사합니다(줄 어디에서든 일치하면 됩니다 — 줄 처음에서만 찾으려면 ^ 를 쓰세요).\n"
+            "일치한 줄이 새 파일의 첫 줄이 되고, 글은 하나도 바뀌지 않습니다.\n"
+            "코드 펜스·환경·수식·주석·front matter 안의 줄은 검사하지 않습니다.\n"
+            "첫 일치 줄 앞의 글은 이 문서에 남습니다.")
         self.prefix_edit = QLineEdit(default_prefix)
+        self.pad_check = QCheckBox("번호 자릿수 맞추기 (-01, -001 …)")
+        self.pad_check.setToolTip("파일 관리자에서 이름순으로 볼 때 -10 이 -2 보다 앞서지 않게 한다(서랍은 {{}} 순서를 따르므로 상관없다).")
+        for w_ in (self.by_heading, self.by_regex):
+            w_.toggled.connect(self._refresh)
+        self.regex_edit.textChanged.connect(self._refresh)
         self.prefix_edit.textChanged.connect(self._refresh)
+        self.pad_check.toggled.connect(self._refresh)
         form = QFormLayout()
         form.addRow("하위 파일 접두어:", self.prefix_edit)
         self.info = QLabel()
@@ -16308,23 +16361,63 @@ class SplitChaptersDialog(QDialog):
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         box = QVBoxLayout(self)
-        lvl = "#" * plan["level"]
-        box.addWidget(QLabel(f"{doc.name} 을(를) 최상위 제목({lvl})마다 잘라 {{{{포함}}}} 줄로 바꿉니다 — 한 단계만."))
+        box.addWidget(QLabel(f"{doc.name} 을(를) 잘라 {{{{포함}}}} 줄로 바꿉니다 — 한 단계만."))
+        box.addWidget(self.by_heading)
+        box.addWidget(self.by_regex)
+        box.addWidget(self.regex_edit)
         box.addLayout(form)
+        box.addWidget(self.pad_check)
         box.addWidget(self.info)
         box.addWidget(self.preview, 1)
         box.addWidget(self.buttons)
         self._refresh()
 
+    def plan(self):
+        return self._plan
+
+    def _compute_plan(self):
+        """(계획 또는 None, 안내 글)."""
+        if self.by_heading.isChecked():
+            if self._head_plan is None:
+                return None, "제목(#)으로 자를 곳이 없습니다."
+            lv = "#" * self._head_plan["level"]
+            return self._head_plan, self._head_note or f"최상위 제목({lv})마다 자릅니다."
+        pat = self.regex_edit.text()
+        if not pat:
+            return None, "정규식을 적어 주세요."
+        try:
+            rx = re.compile(pat)
+        except re.error as e:
+            return None, f"정규식 오류: {e}"
+        plan = split_chapter_sections(self._text, rx=rx)
+        if plan is None:
+            _l, heads, _t = _scan_headings(self._text, rx)
+            return None, (f"일치하는 줄이 {len(heads)}개입니다 — 2개 이상이어야 자를 수 있습니다."
+                          "\n(코드 펜스·환경·수식·주석·front matter 안의 줄은 검사하지 않습니다.)")
+        if len(plan["sections"]) > self.MAX_SECTIONS:
+            return None, f"일치하는 줄이 너무 많습니다({len(plan['sections'])}개). 정규식을 좁혀 주세요."
+        return plan, f"일치한 줄 {len(plan['sections'])}개마다 자릅니다."
+
     def names(self) -> list:
         pre = self.prefix_edit.text().strip()
-        return [f"{pre}-{i}.md" for i in range(1, len(self._plan["sections"]) + 1)]
+        n = len(self._plan["sections"]) if self._plan else 0
+        width = len(str(n)) if self.pad_check.isChecked() else 1
+        if self.pad_check.isChecked():
+            width = max(2, width)
+        return [f"{pre}-{i:0{width}d}.md" for i in range(1, n + 1)]
 
     def prefix_ok(self) -> bool:
         pre = self.prefix_edit.text().strip()
         return bool(pre) and not re.search(r'[\\/:*?"<>|{}]', pre) and not pre.startswith(".")
 
     def _refresh(self):
+        self.regex_edit.setEnabled(self.by_regex.isChecked())
+        self._plan, note = self._compute_plan()
+        if self._plan is None:
+            self.preview.setPlainText("")
+            self.info.setText(note)
+            self.buttons.button(QDialogButtonBox.Ok).setEnabled(False)
+            return
         names = self.names()
         clash = [n for n in names if (self._doc.parent / n).exists()]
         ok = self.prefix_ok() and not clash
@@ -16338,7 +16431,7 @@ class SplitChaptersDialog(QDialog):
         elif clash:
             self.info.setText("이미 있는 파일: " + ", ".join(clash[:5]) + " — 접두어를 바꿔 주세요.")
         else:
-            self.info.setText(f"새 파일 {len(names)}개를 같은 폴더에 만들고, 이 문서에는 제목 앞의 글과 {{{{포함}}}} 줄만 남습니다.")
+            self.info.setText(f"{note}\n새 파일 {len(names)}개를 같은 폴더에 만들고, 이 문서에는 첫 구간 앞의 글과 {{{{포함}}}} 줄만 남습니다.")
         self.buttons.button(QDialogButtonBox.Ok).setEnabled(ok)
 
     def prefix(self) -> str:
@@ -21110,6 +21203,11 @@ class MainWindow(QMainWindow):
         (re.compile(r"\*\*([^*\n]+)\*\*"), r"<b>\1</b>"),
         (re.compile(r"(?<![*\w])\*([^*\n]+)\*(?![*\w])"), r"<i>\1</i>"),
         (re.compile(r"~~([^~\n]+)~~"), r"<s>\1</s>"),
+        # `__산세 굵게__` · `_산세_` (ndhmd4tex 0.27.0) — 같은 경계 규칙
+        (re.compile(r"(?<!\w)__(?=[^\s_])(.+?)(?<=[^\s_])__(?![A-Za-z0-9_])"),
+         r'<b style="font-family:sans-serif">\1</b>'),
+        (re.compile(r"(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?![A-Za-z0-9_])"),
+         r'<span style="font-family:sans-serif">\1</span>'),
     )
 
     @classmethod
@@ -21989,31 +22087,10 @@ class MainWindow(QMainWindow):
         except (OSError, UnicodeDecodeError) as e:
             QMessageBox.warning(self, "장별로 자르기", f"읽지 못했습니다: {e}")
             return
-        plan = split_chapter_sections(text)
-        if plan is None:
-            nxt = next_split_level(text)
-            if nxt is None:
-                QMessageBox.information(
-                    self, "장별로 자르기",
-                    "자를 곳이 없습니다 — 같은 수준의 제목이 둘 이상 있어야 합니다\n"
-                    "(코드 펜스·환경 안의 # 줄은 세지 않습니다).")
-                return
-            _l, heads, _t = _scan_headings(text)
-            n_next = sum(1 for h in heads if h[1] == nxt)
-            box = QMessageBox(self)
-            box.setWindowTitle("장별로 자르기")
-            box.setIcon(QMessageBox.Information)
-            box.setText(f"가장 높은 수준의 제목이 하나뿐이라 그 수준으로는 자를 수 없습니다.\n"
-                        f"한 단계 아래({'#' * nxt}) 제목이 {n_next}개 있습니다 — 그 수준으로 자를까요?\n"
-                        f"(더 높은 제목과 그 앞의 글은 이 문서에 남습니다.)")
-            go = box.addButton(f"{nxt}수준({'#' * nxt})으로 자르기", QMessageBox.AcceptRole)
-            box.addButton("닫기", QMessageBox.RejectRole)
-            box.exec()
-            if box.clickedButton() is not go:
-                return
-            plan = split_chapter_sections(text, level=nxt)
-            if plan is None:
-                return
+        dlg = SplitChaptersDialog(self, doc, text, doc.stem)
+        if dlg.exec() != QDialog.Accepted or dlg.plan() is None:
+            return
+        plan = dlg.plan()
         # 잘려 나가는 구간에 이미 {{포함}} 이 들어 있으면, 그것이 새 하위 파일의 자식이 되어 한 단계 깊어진다.
         for sec in plan["sections"]:
             for name in sec["includes"]:
@@ -22025,9 +22102,6 @@ class MainWindow(QMainWindow):
                         f"포함은 2단계까지만 지원되므로 자르지 않습니다. 그 {{{{포함}}}} 줄을 제목 앞쪽으로 옮기거나 "
                         f"먼저 빼 주세요.")
                     return
-        dlg = SplitChaptersDialog(self, doc, plan, doc.stem)
-        if dlg.exec() != QDialog.Accepted:
-            return
         names = dlg.names()
         bodies, new_text = apply_chapter_split(plan, names)
         written = []
@@ -26153,6 +26227,14 @@ _UI_LANG = "ko"
 _HANGUL_RE = re.compile("[가-힣ㄱ-ㅎㅏ-ㅣ]")
 
 _EN = {
+    '제목(#)마다': 'By heading (#)',
+    '정규식에 일치하는 줄마다': 'At each line matching a regex',
+    '번호 자릿수 맞추기 (-01, -001 …)': 'Zero-pad the numbers (-01, -001 …)',
+    '파일 관리자에서 이름순으로 볼 때 -10 이 -2 보다 앞서지 않게 한다(서랍은 {{}} 순서를 따르므로 상관없다).': 'Keeps -10 from sorting before -2 in a file manager (the drawer follows the {{}} order, so it does not matter there).',
+    '줄 하나에 대해 검사합니다(줄 어디에서든 일치하면 됩니다 — 줄 처음에서만 찾으려면 ^ 를 쓰세요).\n일치한 줄이 새 파일의 첫 줄이 되고, 글은 하나도 바뀌지 않습니다.\n코드 펜스·환경·수식·주석·front matter 안의 줄은 검사하지 않습니다.\n첫 일치 줄 앞의 글은 이 문서에 남습니다.': 'Checked against one line at a time (a match anywhere in the line counts — use ^ to match only at the start).\nThe matching line becomes the first line of the new file; no text is changed.\nLines inside code fences, environments, math, comments and front matter are not checked.\nText before the first matching line stays in this document.',
+    '제목(#)으로 자를 곳이 없습니다.': 'There is nowhere to split by heading (#).',
+    '정규식을 적어 주세요.': 'Enter a regular expression.',
+    '정규식을 좁혀 주세요.': 'Narrow the regular expression.',
     '떼어내기 — 따로 떠다니는 창으로(넓게 펼쳐 놓고 쓸 수 있다)': 'Detach — into a separate floating window (can be spread wide)',
     '붙이기 — 원래 자리(왼쪽 칸)로': 'Attach — back to its place (left pane)',
     '서랍': 'Drawer',
